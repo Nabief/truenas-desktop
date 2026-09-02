@@ -40,6 +40,20 @@ def get_local_ip():
     except Exception:
         return '127.0.0.1'
 
+# ── Détection des pools ZFS montés sous /mnt ──────────────────
+def list_pools():
+    pools = []
+    _SKIP = {'ix-apps', 'ix-applications', 'ix-virt', 'lost+found'}
+    try:
+        for name in sorted(os.listdir('/mnt')):
+            if name.startswith('.') or name in _SKIP:
+                continue
+            if os.path.isdir(os.path.join('/mnt', name)):
+                pools.append(name)
+    except Exception:
+        pass
+    return pools
+
 # ── Vérification prérequis ────────────────────────────────────
 def check_prerequisites():
     results = {}
@@ -610,6 +624,7 @@ HTML = """<!DOCTYPE html>
           <input id="install_dir" value="/mnt/Truenas_Stockage/apps/desktop" />
           <button class="btn-browse" onclick="openBrowser('install_dir')" title="Parcourir">📁</button>
         </div>
+        <div id="pool-hint" style="font-size:12px;color:#8a9bbf;margin-top:4px;"></div>
       </div>
       <div class="form-row">
         <div class="form-group">
@@ -790,6 +805,20 @@ fetch('/check').then(r => r.json()).then(data => {
   fetch('/ip').then(r => r.text()).then(ip => {
     document.getElementById('truenas_ip').value = ip.trim();
   });
+
+  // Auto-détecter le pool et pré-remplir les chemins
+  fetch('/pools').then(r => r.json()).then(pools => {
+    if (pools && pools.length) {
+      const p = '/mnt/' + pools[0];
+      document.getElementById('install_dir').value = p + '/apps/desktop';
+      document.getElementById('vm_dir').value = p + '/vms';
+      document.getElementById('iso_dir').value = p;
+      if (pools.length > 1) {
+        const hint = document.getElementById('pool-hint');
+        if (hint) hint.textContent = 'Pools détectés : ' + pools.join(', ') + ' — utilise 📁 pour en choisir un autre.';
+      }
+    }
+  }).catch(() => {});
 });
 
 // ── Étape 3 : installation ─────────────────────────────────────
@@ -858,6 +887,8 @@ class WizardHandler(http.server.BaseHTTPRequestHandler):
             self._json(check_prerequisites())
         elif self.path == '/ip':
             self._text(get_local_ip())
+        elif self.path == '/pools':
+            self._json(list_pools())
         elif self.path == '/events':
             self._sse()
         elif self.path.startswith('/browse'):
