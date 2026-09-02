@@ -79,6 +79,53 @@ def run_cmd(cmd, shell=True):
     proc.wait()
     return proc.returncode
 
+def _midclt(args, timeout=60):
+    """Appelle le middleware TrueNAS. Retourne (code, stdout, stderr)."""
+    try:
+        p = subprocess.run(['midclt'] + args, capture_output=True, text=True, timeout=timeout)
+        return p.returncode, (p.stdout or '').strip(), (p.stderr or '').strip()
+    except Exception as e:
+        return 1, '', str(e)
+
+
+def configure_truenas(ssh_user):
+    """Automatise les prérequis TrueNAS via midclt : SSH + auth mot de passe,
+    et sudo NOPASSWD pour l'utilisateur. Non bloquant (avertit si échec)."""
+    if not shutil.which('midclt'):
+        emit('⚠ midclt introuvable — configure SSH/sudo manuellement.', 'warn')
+        return
+    emit('▸ Configuration TrueNAS (SSH + sudo) via middleware...', 'step')
+
+    # 1. SSH : autoriser l'authentification par mot de passe
+    rc, out, err = _midclt(['call', 'ssh.update', '{"passwordauth": true}'])
+    emit('✓ SSH : auth par mot de passe activée' if rc == 0
+         else f'⚠ ssh.update a échoué : {err or out}', 'ok' if rc == 0 else 'warn')
+
+    # 2. SSH : activer le service au boot + démarrer
+    _midclt(['call', 'service.update', 'ssh', '{"enable": true}'])
+    rc, out, err = _midclt(['call', 'service.start', 'ssh'])
+    emit('✓ Service SSH démarré' if rc == 0
+         else f'⚠ Démarrage SSH : {err or out}', 'ok' if rc == 0 else 'warn')
+
+    # 3. sudo NOPASSWD pour l'utilisateur SSH
+    rc, out, err = _midclt(['call', 'user.query', f'[["username","=","{ssh_user}"]]'])
+    uid = None
+    if rc == 0 and out:
+        try:
+            data = json.loads(out)
+            if data:
+                uid = data[0].get('id')
+        except Exception:
+            pass
+    if uid is not None:
+        payload = '{"sudo_commands": ["ALL"], "sudo_commands_nopasswd": ["ALL"]}'
+        rc, out, err = _midclt(['call', 'user.update', str(uid), payload])
+        emit(f'✓ sudo sans mot de passe activé pour {ssh_user}' if rc == 0
+             else f'⚠ user.update a échoué : {err or out}', 'ok' if rc == 0 else 'warn')
+    else:
+        emit(f'⚠ Utilisateur {ssh_user} introuvable — active le sudo NOPASSWD manuellement.', 'warn')
+
+
 def run_install(config):
     global INSTALL_RUNNING, INSTALL_DONE
     INSTALL_RUNNING = True
@@ -108,6 +155,9 @@ def run_install(config):
             os.makedirs(os.path.join(install_dir, sub), exist_ok=True)
         emit(f'✓ {install_dir}', 'ok')
         emit(f'✓ {vm_dir}', 'ok')
+
+        # ── 1b. Prérequis TrueNAS automatisés (SSH + sudo) ────
+        configure_truenas(ssh_user)
 
         # ── 2. Sauvegarde config ──────────────────────────────
         emit('▸ Sauvegarde de la configuration...', 'step')
