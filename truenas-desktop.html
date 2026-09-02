@@ -2714,7 +2714,7 @@ select option{ background:#101b2e; color:#e8edf5; }
 // Les appels TrueNAS passent exclusivement par JSON-RPC 2.0 sur /api/current.
 // Même origine pour le navigateur = zéro CORS
 const NAS_URL = '';
-const TRUENAS_UI = 'http://192.168.0.200';
+const TRUENAS_UI = 'http://TRUENAS_IP'; // placeholder : dérivé de l'hôte si non injecté
 const FILEOPS_TOKEN_DEFAULT = 'FILEOPS_TOKEN_PLACEHOLDER'; // injecté par install.sh / update.sh
 let authToken = null;
 let apiKey = null;
@@ -6716,11 +6716,20 @@ document.addEventListener('DOMContentLoaded', () => {
 // ===========================
 // OPEN TRUENAS PAGE
 // ===========================
+// URL de l'interface TrueNAS : valeur configurée si explicite, sinon dérivée de
+// l'hôte courant (l'UI TrueNAS est sur le même hôte que le bureau, en HTTPS).
+function truenasUiBase() {
+  var c = (typeof TRUENAS_UI === 'string') ? TRUENAS_UI.trim() : '';
+  if (c && /^https?:\/\//i.test(c) && c.indexOf('TRUENAS_IP') === -1) {
+    return c.replace(/\/+$/, '');
+  }
+  return 'https://' + location.hostname;
+}
 function openTrueNASPage(path) {
-  window.open(TRUENAS_UI + path, '_blank');
+  window.open(truenasUiBase() + path, '_blank');
 }
 function openTrueNAS() {
-  window.open(TRUENAS_UI, '_blank');
+  window.open(truenasUiBase(), '_blank');
 }
 
 function ctxHideMenu() {
