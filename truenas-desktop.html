@@ -13540,6 +13540,22 @@ if (typeof renderLibvirt2Detail === 'function' && !window._lv2DetailTabsWrapped)
     refreshCatalogVersionV3();
   }
 
+  function ciSchemaDefaultValue(sc) {
+    sc = sc || {};
+    if (sc.type === 'dict') return ciSchemaDefaults(sc.attrs || []);
+    if (sc.type === 'list') return Array.isArray(sc['default']) ? sc['default'] : [];
+    if (sc['default'] !== undefined && sc['default'] !== null) return sc['default'];
+    if (sc.type === 'boolean') return false;
+    if (sc.type === 'int') return null;
+    return '';
+  }
+  function ciSchemaDefaults(questions) {
+    var out = {};
+    (questions || []).forEach(function (q) {
+      if (q && q.variable) out[q.variable] = ciSchemaDefaultValue(q.schema || {});
+    });
+    return out;
+  }
   async function refreshCatalogVersionV3() {
     if (!currentCatalogInstall) return;
 
@@ -13568,6 +13584,20 @@ if (typeof renderLibvirt2Detail === 'function' && !window._lv2DetailTabsWrapped)
     } catch (error) {
       // Les données déjà renvoyées par catalog.apps restent utilisables.
     }
+
+    // Pré-remplit le JSON de config avec les valeurs par défaut du schéma.
+    try {
+      var _vroot = (details && details.versions && details.versions[train]) ? details.versions[train] : details;
+      var _q = (_vroot && _vroot.schema && _vroot.schema.questions)
+            || (details && details.schema && details.schema.questions) || [];
+      if (_q && _q.length) {
+        var _ta = document.getElementById('ci-values');
+        var _cur = _ta ? (_ta.value || '').trim() : '';
+        if (_ta && (_cur === '' || _cur === '{}')) {
+          _ta.value = JSON.stringify(ciSchemaDefaults(_q), null, 2);
+        }
+      }
+    } catch (e) {}
 
     listEl.innerHTML = versions.map(function (version) {
       return '<option value="' + htmlEscape(version) + '"></option>';
