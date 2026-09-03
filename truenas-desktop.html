@@ -3134,6 +3134,7 @@ function initDesktop(sysInfo) {
   loadWidgetData();
   refreshInterval = setInterval(loadWidgetData, 60000); // toutes les 60s pour éviter le spam
   dlBadgeStart();
+  tndLoadConfig();
   setTimeout(tndCheckUpdate, 4000);
   setupContextMenu();
   setupWindowDrag();
@@ -6719,12 +6720,24 @@ document.addEventListener('DOMContentLoaded', () => {
 // ===========================
 // URL de l'interface TrueNAS : valeur configurée si explicite, sinon dérivée de
 // l'hôte courant (l'UI TrueNAS est sur le même hôte que le bureau, en HTTPS).
+var _truenasHost = '';
 function truenasUiBase() {
+  // 1) URL explicitement configurée à l'install
   var c = (typeof TRUENAS_UI === 'string') ? TRUENAS_UI.trim() : '';
   if (c && /^https?:\/\//i.test(c) && c.indexOf('TRUENAS_IP') === -1) {
     return c.replace(/\/+$/, '');
   }
+  // 2) IP réelle du NAS remontée par le sidecar (fiable même en accès par domaine)
+  if (_truenasHost) return 'https://' + _truenasHost;
+  // 3) repli : même hôte que le bureau
   return 'https://' + location.hostname;
+}
+async function tndLoadConfig() {
+  try {
+    var v = await fileops('GET', 'version');
+    _tndUpdate = v || null;
+    if (v && v.truenas_host) _truenasHost = String(v.truenas_host).trim();
+  } catch (e) {}
 }
 function openTrueNASPage(path) {
   window.open(truenasUiBase() + path, '_blank');
