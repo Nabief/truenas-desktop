@@ -68,8 +68,16 @@ def generate_token():
     return secrets.token_urlsafe(24)
 
 # ── Installation ──────────────────────────────────────────────
+INSTALL_LOG = '/tmp/tnd-install.log'
+
+
 def emit(msg, level='info'):
     INSTALL_EVENTS.put({'msg': msg, 'level': level})
+    try:
+        with open(INSTALL_LOG, 'a', encoding='utf-8') as f:
+            f.write(f'[{level}] {msg}\n')
+    except Exception:
+        pass
 
 def run_cmd(cmd, shell=True):
     proc = subprocess.Popen(cmd, shell=shell, stdout=subprocess.PIPE,
@@ -126,10 +134,47 @@ def configure_truenas(ssh_user):
         emit(f'⚠ Utilisateur {ssh_user} introuvable — active le sudo NOPASSWD manuellement.', 'warn')
 
 
+def _ensure_dataset(mount_path):
+    """Crée un vrai dataset ZFS (+ ses ancêtres) pour un chemin sous /mnt via
+    midclt, afin qu'il apparaisse dans Storage. Retourne True si dataset(s) en
+    place, False si on doit retomber sur un simple dossier."""
+    if not shutil.which('midclt') or not mount_path.startswith('/mnt/'):
+        return False
+    ds = mount_path[len('/mnt/'):].strip('/')
+    parts = ds.split('/')
+    if len(parts) < 2:
+        return False  # c'est le pool lui-même
+    for i in range(2, len(parts) + 1):
+        name = '/'.join(parts[:i])
+        rc, out, _ = _midclt(['call', 'pool.dataset.query', json.dumps([["id", "=", name]])])
+        exists = False
+        try:
+            exists = bool(json.loads(out))
+        except Exception:
+            exists = False
+        if exists:
+            continue
+        # Ne pas écraser un dossier déjà rempli (installation existante)
+        full = '/mnt/' + name
+        if os.path.isdir(full) and os.listdir(full):
+            emit(f'⚠ {full} existe déjà en dossier — conservé tel quel.', 'warn')
+            return False
+        rc, out, err = _midclt(['call', 'pool.dataset.create', json.dumps({"name": name})], timeout=120)
+        if rc != 0:
+            emit(f'⚠ Dataset {name} non créé ({err or out}) — dossier simple utilisé.', 'warn')
+            return False
+        emit(f'✓ Dataset créé : {name}', 'ok')
+    return True
+
+
 def run_install(config):
     global INSTALL_RUNNING, INSTALL_DONE
     INSTALL_RUNNING = True
     INSTALL_DONE = False
+    try:
+        open(INSTALL_LOG, 'w', encoding='utf-8').close()  # log neuf par install
+    except Exception:
+        pass
 
     try:
         install_dir  = config['install_dir']
@@ -145,11 +190,16 @@ def run_install(config):
 
         script_dir = os.path.dirname(os.path.abspath(__file__))
 
-        # ── 1. Répertoires ────────────────────────────────────
-        emit('▸ Création des répertoires...', 'step')
-        os.makedirs(install_dir, exist_ok=True)
-        os.makedirs(vm_dir, exist_ok=True)
-        os.chmod(vm_dir, 0o777)
+        # ── 1. Datasets / répertoires ─────────────────────────
+        emit('▸ Création des datasets ZFS...', 'step')
+        for d in (install_dir, vm_dir):
+            if not _ensure_dataset(d):
+                os.makedirs(d, exist_ok=True)  # repli : simple dossier
+        try:
+            os.chmod(vm_dir, 0o777)
+        except Exception:
+            pass
+        # Sous-dossiers applicatifs (à l'intérieur du dataset d'install)
         for sub in ('websites/conf.d', 'websites/php/8.3/ini', 'websites/php/8.2/ini',
                     'websites/php/8.1/ini', 'websites/php/7.4/ini', 'mariadb'):
             os.makedirs(os.path.join(install_dir, sub), exist_ok=True)
