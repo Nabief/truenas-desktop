@@ -171,6 +171,7 @@ TRUENAS_HOST={truenas_host}
 SSH_USER={ssh_user}
 SSH_PASS={ssh_pass}
 FILEOPS_TOKEN={token}
+GITHUB_RAW={(config.get('github_raw') or GITHUB_RAW_DEFAULT).rstrip('/')}
 """
         with open('/etc/truenas-desktop/config.env', 'w') as f:
             f.write(config_content)
@@ -269,6 +270,8 @@ FILEOPS_TOKEN={token}
       FILEOPS_PORT: "8765"
       FILEOPS_WS_PORT: "8766"
       HOST_BOOTSTRAP: "1"
+      APP_DIR: "{install_dir}"
+      GITHUB_RAW: "{github_raw}"
       TRUENAS_SSH_HOST: "{truenas_ip}"
       TRUENAS_SSH_USER: "{ssh_user}"
       TRUENAS_SSH_PASS: "{ssh_pass}"

@@ -38,6 +38,11 @@ SSH_PORT_N = int(os.environ.get('TRUENAS_SSH_PORT', '22'))
 VM_DIR     = os.environ.get('VM_DIR',  '/mnt/Truenas_Stockage/vms')
 ISO_DIR    = os.environ.get('ISO_DIR', '/mnt/Truenas_Stockage')
 
+# ── Version & mise à jour ─────────────────────────────────────────────────────
+APP_VERSION = '1.0.0'
+APP_DIR     = os.environ.get('APP_DIR', '')  # dossier d'install (contient fileops.py, HTML…)
+GITHUB_RAW  = os.environ.get('GITHUB_RAW', 'https://raw.githubusercontent.com/Nabief/truenas-desktop/main').rstrip('/')
+
 # MDM-ACCESS-POLICY-V1-BEGIN
 import tempfile as _tempfile
 import threading as _access_threading
@@ -325,6 +330,68 @@ def _host_bootstrap():
             log.warning('Host bootstrap incomplet : %s', ((err or out) or '')[:200])
     except Exception as e:
         log.warning('Host bootstrap échec : %s', e)
+
+
+# ── MDM-SELF-UPDATE-V1 : version & mise à jour depuis GitHub ──────────────────
+def _fetch_text(url, timeout=15):
+    import urllib.request
+    req = urllib.request.Request(url, headers={'User-Agent': 'TrueNAS-Desktop'})
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        return r.read().decode('utf-8', 'replace').strip()
+
+
+def _version_status():
+    latest = ''
+    try:
+        latest = _fetch_text(GITHUB_RAW + '/version.txt')[:40]
+    except Exception:
+        latest = ''
+
+    def _norm(v):
+        return [int(x) for x in re.findall(r'\d+', v or '')[:4]]
+
+    upd = False
+    if latest:
+        try:
+            upd = _norm(latest) > _norm(APP_VERSION)
+        except Exception:
+            upd = (latest != APP_VERSION)
+    return {'version': APP_VERSION, 'latest': latest, 'update_available': bool(upd)}
+
+
+def _do_update():
+    """Télécharge la dernière version des fichiers dans APP_DIR et ré-injecte le
+    token. Le HTML est servi à chaud ; fileops.py nécessite un redémarrage."""
+    if not APP_DIR or not os.path.isdir(APP_DIR):
+        raise RuntimeError("APP_DIR introuvable — impossible de localiser l'installation.")
+    import urllib.request
+    updated = []
+    for f in ('fileops.py', 'truenas-desktop.html', 'vnc-viewer.html'):
+        dst = os.path.join(APP_DIR, f)
+        tmp = dst + '.new'
+        urllib.request.urlretrieve(GITHUB_RAW + '/' + f, tmp)
+        os.replace(tmp, dst)
+        updated.append(f)
+    html = os.path.join(APP_DIR, 'truenas-desktop.html')
+    try:
+        with open(html, 'r', encoding='utf-8') as fh:
+            s = fh.read()
+        s = s.replace('FILEOPS_TOKEN_PLACEHOLDER', TOKEN)
+        with open(html, 'w', encoding='utf-8') as fh:
+            fh.write(s)
+    except Exception:
+        pass
+    return updated
+
+
+def _schedule_self_restart():
+    def _r():
+        _sh_time.sleep(1.5)
+        try:
+            ssh_exec("sudo -n docker restart truenas-fileops", timeout=30)
+        except Exception:
+            pass
+    _threading.Thread(target=_r, daemon=True).start()
 
 
 def _libvirt_path_requires_daemon(path):
@@ -5877,6 +5944,14 @@ class FileOpsHandler(BaseHTTPRequestHandler):
                 self._json(500, {'error': str(e)})
             return
 
+        # MDM-SELF-UPDATE-V1 : version installée + dernière dispo
+        if path == '/version':
+            try:
+                self._json(200, _version_status())
+            except Exception as e:
+                self._json(200, {'version': APP_VERSION, 'latest': '', 'update_available': False, 'error': str(e)})
+            return
+
         # MDM-DOWNLOADS-V1 : liste des téléchargements
         if path == '/downloads/list':
             try:
@@ -6562,6 +6637,17 @@ class FileOpsHandler(BaseHTTPRequestHandler):
         if path == '/downloads/clear':
             try:
                 self._json(200, _dl_clear())
+            except Exception as e:
+                self._json(500, {'error': str(e)})
+            return
+
+        # MDM-SELF-UPDATE-V1 : mise à jour depuis GitHub + redémarrage du sidecar
+        if path == '/update':
+            try:
+                updated = _do_update()
+                _schedule_self_restart()
+                self._json(200, {'ok': True, 'updated': updated, 'restarting': True,
+                                 'version': APP_VERSION})
             except Exception as e:
                 self._json(500, {'error': str(e)})
             return

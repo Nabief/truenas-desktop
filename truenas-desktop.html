@@ -3134,6 +3134,7 @@ function initDesktop(sysInfo) {
   loadWidgetData();
   refreshInterval = setInterval(loadWidgetData, 60000); // toutes les 60s pour éviter le spam
   dlBadgeStart();
+  setTimeout(tndCheckUpdate, 4000);
   setupContextMenu();
   setupWindowDrag();
   toast('✅ Bienvenue sur TrueNAS Desktop !', 3000);
@@ -6732,6 +6733,49 @@ function openTrueNAS() {
   window.open(truenasUiBase(), '_blank');
 }
 
+// ── Version & mise à jour ─────────────────────────────────────
+async function tndAbout() {
+  document.getElementById('create-app-title').textContent = 'À propos / Mise à jour';
+  var m = document.getElementById('modal-create-app'); m.style.display = 'flex';
+  var box = document.getElementById('create-app-form');
+  box.innerHTML = '<div class="fs-loading" style="height:100px;"><div class="spinner"></div></div>';
+  var v = { version: '?', latest: '', update_available: false };
+  try { v = await fileops('GET', 'version'); } catch (e) {}
+  var up = !!v.update_available;
+  var latestStyle = up ? 'background:rgba(240,180,41,0.15);color:#f0b429;border:1px solid rgba(240,180,41,0.4);' : '';
+  var h = '<div style="display:flex;flex-direction:column;gap:14px;">'
+    + '<div class="tnd-panel tnd-panel-pad" style="display:flex;flex-direction:column;gap:10px;">'
+    + '<div style="font-weight:700;font-size:15px;">TrueNAS Desktop</div>'
+    + '<div class="tnd-row" style="justify-content:space-between;"><span class="tnd-muted">Version installée</span><span class="tnd-badge">' + (v.version || '?') + '</span></div>'
+    + '<div class="tnd-row" style="justify-content:space-between;"><span class="tnd-muted">Dernière version</span><span class="tnd-badge" style="' + latestStyle + '">' + (v.latest || '—') + '</span></div>'
+    + (up
+        ? '<div style="background:rgba(240,180,41,0.12);border:1px solid rgba(240,180,41,0.35);color:#f0b429;padding:8px 10px;border-radius:8px;font-size:13px;">⬆ Une mise à jour est disponible.</div>'
+          + '<button class="fs-btn" style="width:100%;justify-content:center;background:rgba(62,207,142,0.15);border-color:rgba(62,207,142,0.3);color:var(--success);" onclick="tndDoUpdate()">⬆ Mettre à jour maintenant</button>'
+        : '<div class="tnd-muted" style="font-size:12px;">✓ Tu es à jour.</div>'
+          + '<button class="fs-btn" style="width:100%;justify-content:center;" onclick="tndDoUpdate()">Forcer la mise à jour</button>')
+    + '</div>'
+    + '<div style="text-align:right;"><button class="fs-btn" onclick="closeCreateApp()">Fermer</button></div>'
+    + '</div>';
+  box.innerHTML = h;
+}
+async function tndDoUpdate() {
+  if (!await showConfirm('Lancer la mise à jour ? Le sidecar va redémarrer (~30 s).')) return;
+  toast('⬆ Mise à jour en cours…');
+  try {
+    await fileops('POST', 'update', {});
+    toast('✓ Mise à jour lancée — rechargement dans 30 s');
+    setTimeout(function () { location.reload(true); }, 32000);
+  } catch (e) { toast('❌ ' + e.message); }
+}
+async function tndCheckUpdate() {
+  try {
+    var v = await fileops('GET', 'version');
+    if (v && v.update_available) {
+      toast('⬆ Mise à jour ' + (v.latest || '') + ' disponible — ouvre « À propos / MàJ »', 8000);
+    }
+  } catch (e) {}
+}
+
 function ctxHideMenu() {
   var m = document.getElementById('ctx-menu');
   if (m) m.style.display = 'none';
@@ -7357,6 +7401,8 @@ var ALL_APPS = [
     imgClass:'icon-web',      svg:'<svg viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,0.95)" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M18 13v6a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>' },
   { id:'terminal',    label:'Terminal',             action:function(){ openApp('terminal'); },
     imgClass:'icon-terminal', svg:'<svg viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,0.95)" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>' },
+  { id:'about',       label:'À propos / MàJ',       action:function(){ tndAbout(); },
+    imgStyle:'background:linear-gradient(135deg,#6366f1,#a855f7);', svg:'<svg viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,0.95)" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>' },
   { id:'vms',         label:'VMs TrueNAS (legacy)',  action:function(){ openApp('vms'); },
     imgClass:'icon-vm',       svg:'<svg viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,0.95)" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/><path d="M7 8l2 2-2 2M13 10h4"/></svg>' },
   { id:'libvirt',     label:'VMs QEMU/KVM',          action:function(){ openApp('libvirt'); },
