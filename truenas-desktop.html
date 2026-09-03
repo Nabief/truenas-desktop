@@ -8440,6 +8440,38 @@ async function loadCatalog() {
 
   el.innerHTML = '<div class="empty-state" style="height:200px;grid-column:1/-1;"><div class="es-icon">&#128230;</div><span>Catalogue indisponible: ' + (lastErr ? lastErr.message : 'API catalogue non disponible') + '</span></div>';
 }
+// ── Installer une app personnalisée via docker-compose (YAML) ──
+function catalogCustomYaml() {
+  document.getElementById('create-app-title').textContent = 'App personnalisée (docker-compose)';
+  var m = document.getElementById('modal-create-app'); m.style.display = 'flex';
+  var box = document.getElementById('create-app-form');
+  box.innerHTML =
+      '<div class="tnd-hint" style="margin-bottom:12px;line-height:1.6;">Colle un <b>docker-compose</b> (comme « Custom App » de TrueNAS). Les chemins d\'hôte doivent exister (Storage), et les ports ne pas être déjà pris.</div>'
+    + formRow('Nom de l\'app', '<input id="ca-yaml-name" class="tnd-input" placeholder="mon-app (minuscules, chiffres, tirets)" />')
+    + formRow('docker-compose (YAML)', '<textarea id="ca-yaml-body" class="tnd-input" rows="14" spellcheck="false" placeholder="services:&#10;  web:&#10;    image: nginx:alpine&#10;    ports:&#10;      - \\"8095:80\\"" style="font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12.5px;resize:vertical;white-space:pre;overflow-wrap:normal;"></textarea>')
+    + '<div id="ca-yaml-status" style="min-height:16px;font-size:12px;color:var(--text-dim);word-break:break-word;margin:4px 0 10px;"></div>'
+    + '<div style="display:flex;gap:8px;justify-content:flex-end;"><button class="fs-btn" onclick="closeCreateApp()">Annuler</button>'
+    + '<button class="fs-btn" id="ca-yaml-btn" style="background:rgba(62,207,142,0.15);border-color:rgba(62,207,142,0.3);color:var(--success);" onclick="catalogYamlInstall()">⬇ Installer</button></div>';
+}
+async function catalogYamlInstall() {
+  var name = ((document.getElementById('ca-yaml-name') || {}).value || '').trim();
+  var yaml = (document.getElementById('ca-yaml-body') || {}).value || '';
+  var st = document.getElementById('ca-yaml-status');
+  function err(m) { if (st) { st.textContent = m; st.style.color = '#f87171'; } }
+  if (!/^[a-z0-9-]+$/.test(name)) { err('Nom invalide : minuscules, chiffres et tirets uniquement.'); return; }
+  if (!yaml.trim()) { err('Le YAML est vide.'); return; }
+  var btn = document.getElementById('ca-yaml-btn'); if (btn) btn.disabled = true;
+  if (st) { st.textContent = '⏳ Installation en cours… (peut prendre 1–2 min)'; st.style.color = 'var(--text-dim)'; }
+  try {
+    await socketCall('/app', 'POST', { custom_app: true, app_name: name, custom_compose_config_string: yaml });
+    toast('✅ App « ' + name + ' » créée');
+    closeCreateApp();
+    try { if (document.getElementById('win-docker') && document.getElementById('win-docker').classList.contains('visible')) loadContainers(); } catch (e) {}
+  } catch (e) {
+    err('❌ ' + (e && e.message ? e.message : e));
+    if (btn) btn.disabled = false;
+  }
+}
 function catalogFilter(q) {
   const el = document.getElementById('catalog-content');
   if (!el) return;
@@ -8534,15 +8566,19 @@ function catalogShowDetail(app) {
     openCreateApp(name, app.train || app.catalog || '');
   };
 
-  document.getElementById('modal-catalog-detail').classList.add('open');
+  var _cdm = document.getElementById('modal-catalog-detail');
+  _cdm.classList.add('open');
+  _cdm.style.display = 'flex';
+  _cdm.setAttribute('aria-hidden', 'false');
   // Fermer en cliquant hors du modal
-  document.getElementById('modal-catalog-detail').onclick = function(e) {
+  _cdm.onclick = function(e) {
     if (e.target === this) closeCatalogDetail();
   };
 }
 
 function closeCatalogDetail() {
-  document.getElementById('modal-catalog-detail').classList.remove('open');
+  var m = document.getElementById('modal-catalog-detail');
+  if (m) { m.classList.remove('open'); m.style.display = 'none'; m.setAttribute('aria-hidden', 'true'); }
 }
 
 // ============================================================
@@ -12447,8 +12483,9 @@ if (typeof renderLibvirt2Detail === 'function' && !window._lv2DetailTabsWrapped)
       <button class="win-btn cls" onclick="closeWin('catalog')"></button>
     </div></div>
   <div class="window-body" style="display:flex;flex-direction:column;gap:0;padding:0;overflow:hidden;">
-    <div style="padding:10px 14px;border-bottom:1px solid rgba(255,255,255,0.07);flex-shrink:0;">
-      <input id="catalog-search" class="app-input" type="text" placeholder="🔍 Rechercher dans le catalogue..." oninput="catalogFilter(this.value)" style="width:100%;box-sizing:border-box;">
+    <div style="padding:10px 14px;border-bottom:1px solid rgba(255,255,255,0.07);flex-shrink:0;display:flex;gap:10px;align-items:center;">
+      <input id="catalog-search" class="app-input" type="text" placeholder="🔍 Rechercher dans le catalogue..." oninput="catalogFilter(this.value)" style="flex:1;min-width:0;box-sizing:border-box;">
+      <button class="fs-btn" onclick="catalogCustomYaml()" style="white-space:nowrap;" title="Installer une app personnalisée via docker-compose">＋ App perso (YAML)</button>
     </div>
     <div id="catalog-content" style="flex:1;overflow-y:auto;padding:14px;display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:12px;align-content:start;">
       <div class="fs-loading" style="height:200px;grid-column:1/-1;"><div class="spinner"></div></div>
@@ -12905,7 +12942,7 @@ if (typeof renderLibvirt2Detail === 'function' && !window._lv2DetailTabsWrapped)
       + '  <div style="margin-top:5px;font-size:10px;color:var(--text-dim);">Lettres minuscules, chiffres et tirets uniquement.</div>'
       + '</div>'
       + '<div class="form-group" style="margin-bottom:14px;">'
-      + '  <label for="catalog-install-values">Configuration avancée (JSON)</label>'
+      + '  <label for="catalog-install-values">Configuration (JSON — pré‑rempli avec les valeurs par défaut de l’app)</label>'
       + '  <textarea id="catalog-install-values" spellcheck="false" style="width:100%;height:150px;resize:vertical;background:rgba(0,0,0,.28);border:1px solid var(--glass-border);border-radius:8px;padding:10px;color:var(--text);font:11px/1.45 ui-monospace,SFMono-Regular,Consolas,monospace;outline:none;">{}</textarea>'
       + '  <div style="margin-top:5px;font-size:10px;color:var(--text-dim);">Laissez <code>{}</code> pour utiliser les valeurs par défaut du catalogue.</div>'
       + '</div>'
@@ -12937,6 +12974,7 @@ if (typeof renderLibvirt2Detail === 'function' && !window._lv2DetailTabsWrapped)
         version: firstString([version, versionOf(catalogApp)], 'latest')
       };
       renderCatalogInstallForm(catalogInstallContext);
+      catalogPrefillDefaults(catalogInstallContext);
       return;
     }
 
@@ -12945,6 +12983,50 @@ if (typeof renderLibvirt2Detail === 'function' && !window._lv2DetailTabsWrapped)
     }
     notify('Erreur : formulaire de création indisponible.');
   };
+
+  function schemaDefaultValue(sc) {
+    sc = sc || {};
+    if (sc.type === 'dict') return schemaDefaults(sc.attrs || []);
+    if (sc.type === 'list') return Array.isArray(sc['default']) ? sc['default'] : [];
+    if (sc['default'] !== undefined && sc['default'] !== null) return sc['default'];
+    if (sc.type === 'boolean') return false;
+    if (sc.type === 'int') return null;
+    return '';
+  }
+  function schemaDefaults(questions) {
+    var out = {};
+    (questions || []).forEach(function (q) {
+      if (q && q.variable) out[q.variable] = schemaDefaultValue(q.schema || {});
+    });
+    return out;
+  }
+  function findQuestions(detail, version) {
+    if (!detail) return [];
+    if (detail.schema && detail.schema.questions) return detail.schema.questions;
+    var vers = detail.versions || detail.app_versions;
+    if (vers && typeof vers === 'object') {
+      var v = vers[version] || vers[detail.latest_version];
+      if (!v) { for (var k in vers) { v = vers[k]; break; } }
+      if (v && v.schema && v.schema.questions) return v.schema.questions;
+    }
+    return [];
+  }
+  // Pré-remplit la zone JSON avec les valeurs par défaut du schéma de l'app.
+  async function catalogPrefillDefaults(ctx) {
+    var ta = byId('catalog-install-values');
+    if (!ta || !ctx) return;
+    try {
+      var detail = await wsCall('catalog.get_app_details',
+        [ctx.catalog_app, { train: ctx.train }], 60000);
+      if (detail && detail.result !== undefined) detail = detail.result;
+      var questions = findQuestions(detail, ctx.version);
+      if (questions && questions.length) {
+        var defs = schemaDefaults(questions);
+        var cur = (ta.value || '').trim();
+        if (cur === '' || cur === '{}') ta.value = JSON.stringify(defs, null, 2);
+      }
+    } catch (e) { /* schéma indisponible : on garde {} */ }
+  }
 
   window.saveCatalogApp = async function saveCatalogApp() {
     var context = catalogInstallContext;
