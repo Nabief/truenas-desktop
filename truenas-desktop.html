@@ -6772,7 +6772,7 @@ async function tndCheckUpdate() {
   try {
     var v = await fileops('GET', 'version');
     _tndUpdate = v || null;
-    if (v && v.update_available) {
+    if (tndUpdatePending()) {
       toast('⬆ Mise à jour ' + (v.latest || '') + ' disponible — voir Alertes', 8000);
     }
     try { wsRefreshAlertBadge(); } catch (e) {}
@@ -6781,15 +6781,28 @@ async function tndCheckUpdate() {
     }
   } catch (e) {}
 }
+// Une MàJ est-elle en attente (dispo ET non masquée pour cette version) ?
+function tndUpdatePending() {
+  var v = _tndUpdate;
+  if (!v || !v.update_available) return false;
+  try { if (localStorage.getItem('tnd-update-dismissed') === v.latest) return false; } catch (e) {}
+  return true;
+}
+function tndDismissUpdate() {
+  try { if (_tndUpdate && _tndUpdate.latest) localStorage.setItem('tnd-update-dismissed', _tndUpdate.latest); } catch (e) {}
+  try { loadAlertsWindow(); } catch (e) {}
+  try { wsRefreshAlertBadge(); } catch (e) {}
+}
 // Carte de notification "mise à jour disponible" pour le gestionnaire d'alertes.
 function tndUpdateCardHtml() {
+  if (!tndUpdatePending()) return '';
   var v = _tndUpdate;
-  if (!v || !v.update_available) return '';
   return '<div style="background:rgba(240,180,41,0.10);border:1px solid rgba(240,180,41,0.30);border-left:3px solid var(--warning);border-radius:8px;padding:12px 14px;">'
     + '<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">'
     + '<span style="color:var(--warning);font-size:11px;font-weight:700;">MISE À JOUR</span>'
     + '<span style="color:var(--text-dim);font-size:11px;">TrueNAS Desktop</span>'
     + '<button onclick="tndAbout()" style="margin-left:auto;background:rgba(62,207,142,0.15);border:1px solid rgba(62,207,142,0.3);color:var(--success);border-radius:4px;padding:3px 11px;cursor:pointer;font-size:11px;">Mettre à jour</button>'
+    + '<button onclick="tndDismissUpdate()" style="background:rgba(255,255,255,0.07);border:none;color:var(--text-dim);border-radius:4px;padding:3px 10px;cursor:pointer;font-size:11px;">Effacer</button>'
     + '</div>'
     + '<div style="font-size:13px;line-height:1.5;">Version <b>' + (v.latest || '') + '</b> disponible (installée : ' + (v.version || '?') + ').</div>'
     + '</div>';
@@ -7730,7 +7743,7 @@ function wsRefreshAlertBadge() {
     var alerts = ensureArray(rawList).filter(function(a){ return !a.dismissed; });
     var badge  = document.getElementById('badge-count');
     if (badge) {
-      var extra = (_tndUpdate && _tndUpdate.update_available) ? 1 : 0;
+      var extra = tndUpdatePending() ? 1 : 0;
       var n = alerts.length + extra;
       badge.textContent = n > 99 ? '99+' : n;
       badge.style.display = n ? 'flex' : 'none';
