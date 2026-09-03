@@ -13556,6 +13556,20 @@ if (typeof renderLibvirt2Detail === 'function' && !window._lv2DetailTabsWrapped)
     });
     return out;
   }
+  // Cherche les "questions" du schéma dans un objet app/détails (toutes versions).
+  function ciFindQuestions(obj, versionsArr) {
+    if (!obj) return [];
+    if (obj.schema && obj.schema.questions && obj.schema.questions.length) return obj.schema.questions;
+    var vmap = obj.versions || obj.app_versions;
+    if (vmap && typeof vmap === 'object') {
+      var keys = (versionsArr || []).concat(Object.keys(vmap));
+      for (var i = 0; i < keys.length; i++) {
+        var v = vmap[keys[i]];
+        if (v && v.schema && v.schema.questions && v.schema.questions.length) return v.schema.questions;
+      }
+    }
+    return [];
+  }
   async function refreshCatalogVersionV3() {
     if (!currentCatalogInstall) return;
 
@@ -13587,9 +13601,8 @@ if (typeof renderLibvirt2Detail === 'function' && !window._lv2DetailTabsWrapped)
 
     // Pré-remplit le JSON de config avec les valeurs par défaut du schéma.
     try {
-      var _vroot = (details && details.versions && details.versions[train]) ? details.versions[train] : details;
-      var _q = (_vroot && _vroot.schema && _vroot.schema.questions)
-            || (details && details.schema && details.schema.questions) || [];
+      var _q = ciFindQuestions(details, versions);
+      if (!_q.length) _q = ciFindQuestions(candidate, versions);
       if (_q && _q.length) {
         var _ta = document.getElementById('ci-values');
         var _cur = _ta ? (_ta.value || '').trim() : '';
