@@ -3413,19 +3413,24 @@ async function loadPools() {
 async function loadNotifs() {
   const el    = document.getElementById('notif-list');
   const badge = document.getElementById('badge-count');
+  var upPending = false;
+  try { upPending = tndUpdatePending(); } catch (e) {}
+  var upItem = upPending
+    ? '<div class="notif-item" style="cursor:pointer;" onclick="tndAbout()"><div class="notif-dot warning"></div><div class="notif-text">Mise à jour ' + ((_tndUpdate && _tndUpdate.latest) || '') + ' disponible<div class="notif-time">TrueNAS Desktop — cliquer pour installer</div></div></div>'
+    : '';
   try {
     const raw    = await socketCall('/alert/list');
     const alerts = ensureArray(raw).filter(a => !a.dismissed);
-    if (!alerts.length) {
+    if (!alerts.length && !upPending) {
       el.innerHTML = '<div style="color:var(--accent);font-size:12px;text-align:center;padding:8px 0;opacity:0.7;">● Aucune alerte</div>';
       badge.style.display = 'none';
       return;
     }
     const crits = alerts.filter(a => (a.klass||a.level||'').toUpperCase().includes('CRIT'));
-    const count = crits.length || alerts.length;
+    const count = (crits.length || alerts.length) + (upPending ? 1 : 0);
     badge.textContent = count > 9 ? '9+' : String(count);
     badge.style.display = count > 0 ? 'flex' : 'none';
-    el.innerHTML = '';
+    el.innerHTML = upItem;
     alerts.slice(0,4).forEach(alert => {
       const level  = (alert.level || alert.klass || 'INFO').toLowerCase();
       const dotCls = level.includes('crit') ? 'danger' : level.includes('warn') ? 'warning' : level.includes('notice') ? 'info' : 'success';
@@ -3439,8 +3444,9 @@ async function loadNotifs() {
       </div>`;
     });
   } catch {
-    el.innerHTML = '<div style="color:var(--text-dim);font-size:12px;text-align:center;padding:8px 0;">✅ Système opérationnel</div>';
-    badge.style.display = 'none';
+    el.innerHTML = upItem || '<div style="color:var(--text-dim);font-size:12px;text-align:center;padding:8px 0;">✅ Système opérationnel</div>';
+    if (upPending) { badge.textContent = '1'; badge.style.display = 'flex'; }
+    else { badge.style.display = 'none'; }
   }
 }
 
@@ -6788,7 +6794,7 @@ async function tndCheckUpdate() {
     if (tndUpdatePending()) {
       toast('⬆ Mise à jour ' + (v.latest || '') + ' disponible — voir Alertes', 8000);
     }
-    try { wsRefreshAlertBadge(); } catch (e) {}
+    try { loadNotifs(); } catch (e) {}
     if (document.getElementById('win-notifs') && document.getElementById('win-notifs').classList.contains('visible')) {
       try { loadAlertsWindow(); } catch (e) {}
     }
@@ -6804,7 +6810,7 @@ function tndUpdatePending() {
 function tndDismissUpdate() {
   try { if (_tndUpdate && _tndUpdate.latest) localStorage.setItem('tnd-update-dismissed', _tndUpdate.latest); } catch (e) {}
   try { loadAlertsWindow(); } catch (e) {}
-  try { wsRefreshAlertBadge(); } catch (e) {}
+  try { loadNotifs(); } catch (e) {}
 }
 // Carte de notification "mise à jour disponible" pour le gestionnaire d'alertes.
 function tndUpdateCardHtml() {
