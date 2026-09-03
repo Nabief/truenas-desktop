@@ -6767,13 +6767,32 @@ async function tndDoUpdate() {
     setTimeout(function () { location.reload(true); }, 32000);
   } catch (e) { toast('❌ ' + e.message); }
 }
+var _tndUpdate = null;
 async function tndCheckUpdate() {
   try {
     var v = await fileops('GET', 'version');
+    _tndUpdate = v || null;
     if (v && v.update_available) {
-      toast('⬆ Mise à jour ' + (v.latest || '') + ' disponible — ouvre « À propos / MàJ »', 8000);
+      toast('⬆ Mise à jour ' + (v.latest || '') + ' disponible — voir Alertes', 8000);
+    }
+    try { wsRefreshAlertBadge(); } catch (e) {}
+    if (document.getElementById('win-notifs') && document.getElementById('win-notifs').classList.contains('visible')) {
+      try { loadAlertsWindow(); } catch (e) {}
     }
   } catch (e) {}
+}
+// Carte de notification "mise à jour disponible" pour le gestionnaire d'alertes.
+function tndUpdateCardHtml() {
+  var v = _tndUpdate;
+  if (!v || !v.update_available) return '';
+  return '<div style="background:rgba(240,180,41,0.10);border:1px solid rgba(240,180,41,0.30);border-left:3px solid var(--warning);border-radius:8px;padding:12px 14px;">'
+    + '<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">'
+    + '<span style="color:var(--warning);font-size:11px;font-weight:700;">MISE À JOUR</span>'
+    + '<span style="color:var(--text-dim);font-size:11px;">TrueNAS Desktop</span>'
+    + '<button onclick="tndAbout()" style="margin-left:auto;background:rgba(62,207,142,0.15);border:1px solid rgba(62,207,142,0.3);color:var(--success);border-radius:4px;padding:3px 11px;cursor:pointer;font-size:11px;">Mettre à jour</button>'
+    + '</div>'
+    + '<div style="font-size:13px;line-height:1.5;">Version <b>' + (v.latest || '') + '</b> disponible (installée : ' + (v.version || '?') + ').</div>'
+    + '</div>';
 }
 
 function ctxHideMenu() {
@@ -7711,8 +7730,10 @@ function wsRefreshAlertBadge() {
     var alerts = ensureArray(rawList).filter(function(a){ return !a.dismissed; });
     var badge  = document.getElementById('badge-count');
     if (badge) {
-      badge.textContent = alerts.length > 99 ? '99+' : alerts.length;
-      badge.style.display = alerts.length ? 'flex' : 'none';
+      var extra = (_tndUpdate && _tndUpdate.update_available) ? 1 : 0;
+      var n = alerts.length + extra;
+      badge.textContent = n > 99 ? '99+' : n;
+      badge.style.display = n ? 'flex' : 'none';
     }
   }).catch(function(){});
 }
@@ -7788,14 +7809,20 @@ async function loadAlertsWindow() {
   if (!el) return;
   el.innerHTML = '<div class="fs-loading" style="height:200px;"><div class="spinner"></div> Chargement...</div>';
   try {
+    try { _tndUpdate = await fileops('GET', 'version'); } catch (e) {}
+    var upCard = tndUpdateCardHtml();
     const alerts = ensureArray(await socketCall('/alert/list'));
-    if (!alerts.length) {
+    if (!alerts.length && !upCard) {
       el.innerHTML = '<div class="empty-state" style="height:200px;"><div class="es-icon">ok</div><span>Aucune alerte — Système opérationnel</span></div>';
       return;
     }
-    let html = '<div style="display:flex;justify-content:flex-end;margin-bottom:10px;">'
-      + '<button class="fs-btn" onclick="dismissAllAlerts()">Effacer toutes</button>'
-      + '</div><div style="display:flex;flex-direction:column;gap:8px;">';
+    let html = '';
+    if (alerts.length) {
+      html += '<div style="display:flex;justify-content:flex-end;margin-bottom:10px;">'
+        + '<button class="fs-btn" onclick="dismissAllAlerts()">Effacer toutes</button>'
+        + '</div>';
+    }
+    html += '<div style="display:flex;flex-direction:column;gap:8px;">' + upCard;
     console.log('[alerts] raw data:', JSON.stringify(alerts[0]));
     alerts.forEach(function(a) {
       var level = (a.level || a.klass || 'INFO').toLowerCase();
