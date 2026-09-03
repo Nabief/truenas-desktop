@@ -1330,6 +1330,7 @@ select option{ background:#101b2e; color:#e8edf5; }
   .jh-bool { color:#c792ea; }
   .jh-null { color:#c792ea; }
   .jh-punc { color:#8a9bbf; }
+  .jh-comment { color:#6b7a99; font-style:italic; }
 
 /* MDM-INSTALLED-APP-EDIT-CSS-BEGIN */
 #modal-create-app.dl-wide > div {
@@ -8476,6 +8477,7 @@ function catalogCustomYaml() {
     + '<div id="ca-yaml-status" style="min-height:16px;font-size:12px;color:var(--text-dim);word-break:break-word;margin:4px 0 10px;"></div>'
     + '<div style="display:flex;gap:8px;justify-content:flex-end;"><button class="fs-btn" onclick="closeCreateApp()">Annuler</button>'
     + '<button class="fs-btn" id="ca-yaml-btn" style="background:rgba(62,207,142,0.15);border-color:rgba(62,207,142,0.3);color:var(--success);" onclick="catalogYamlInstall()">⬇ Installer</button></div>';
+  attachJsonHighlight(document.getElementById('ca-yaml-body'), yamlHighlight);
 }
 async function catalogYamlInstall() {
   var name = ((document.getElementById('ca-yaml-name') || {}).value || '').trim();
@@ -8512,20 +8514,58 @@ function jsonHighlight(code) {
     }
   );
 }
-function attachJsonHighlight(ta) {
+function hlYamlVal(v) {
+  var toks = [];
+  v = v.replace(/(["'])(?:\\.|(?!\1).)*\1/g, function (m) { toks.push('<span class="jh-str">' + m + '</span>'); return ' ' + (toks.length - 1) + ' '; });
+  v = v.replace(/\b(true|false|yes|no|on|off|null)\b/gi, '<span class="jh-bool">$1</span>');
+  v = v.replace(/(^|\s)(-?\d+(?:\.\d+)?)(?=\s|$)/g, function (_, p, n) { return p + '<span class="jh-num">' + n + '</span>'; });
+  v = v.replace(/ (\d+) /g, function (_, i) { return toks[i]; });
+  return v;
+}
+function yamlHighlight(code) {
+  code = String(code == null ? '' : code).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  return code.split('\n').map(function (line) {
+    var comment = '';
+    var cIdx = line.search(/(?:^|\s)#/);
+    if (cIdx >= 0) {
+      var hp = line.indexOf('#', cIdx);
+      comment = '<span class="jh-comment">' + line.slice(hp) + '</span>';
+      line = line.slice(0, hp);
+    }
+    var m = line.match(/^(\s*(?:-\s+)?)([^\s:#][^:]*?)(:)(\s.*|)$/);
+    if (m) {
+      return m[1].replace(/-/g, '<span class="jh-punc">-</span>')
+        + '<span class="jh-key">' + m[2] + '</span><span class="jh-punc">:</span>'
+        + hlYamlVal(m[4]) + comment;
+    }
+    var l = line.match(/^(\s*)(-)(\s.*|)$/);
+    if (l) return l[1] + '<span class="jh-punc">-</span>' + hlYamlVal(l[3]) + comment;
+    return hlYamlVal(line) + comment;
+  }).join('\n');
+}
+function attachJsonHighlight(ta, hl) {
   if (!ta || ta._jhAttached) return;
   ta._jhAttached = true;
-  var wrap = document.createElement('div');
-  wrap.className = 'jh-wrap';
+  hl = hl || jsonHighlight;
+  // Copie les styles réels du textarea AVANT de le rendre transparent.
+  var cs = getComputedStyle(ta);
   var pre = document.createElement('pre');
   pre.className = 'jh-pre';
+  ['fontFamily', 'fontSize', 'lineHeight', 'letterSpacing', 'padding', 'borderWidth', 'borderRadius', 'tabSize'].forEach(function (p) {
+    try { pre.style[p] = cs[p]; } catch (e) {}
+  });
+  pre.style.borderStyle = 'solid';
+  pre.style.borderColor = 'transparent';
+  pre.style.background = cs.backgroundColor;
   var codeEl = document.createElement('code');
   pre.appendChild(codeEl);
+  var wrap = document.createElement('div');
+  wrap.className = 'jh-wrap';
   ta.parentNode.insertBefore(wrap, ta);
   wrap.appendChild(pre);
   wrap.appendChild(ta);
   function upd() {
-    codeEl.innerHTML = jsonHighlight(ta.value) + '\n';
+    codeEl.innerHTML = hl(ta.value) + '\n';
     pre.scrollTop = ta.scrollTop; pre.scrollLeft = ta.scrollLeft;
   }
   ta.addEventListener('input', upd);
