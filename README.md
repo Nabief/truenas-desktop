@@ -26,7 +26,7 @@ L'installation se fait via un **assistant web** (formulaire) : une seule command
 1. **TrueNAS → System → Shell**, coller cette ligne :
 
    ```bash
-   curl -fsSL https://raw.githubusercontent.com/Nabief/truenas-desktop/main/setup-wizard.py -o /tmp/tnd-setup.py && sudo python3 /tmp/tnd-setup.py
+   sudo bash -c 'curl -fsSL https://raw.githubusercontent.com/Nabief/truenas-desktop/main/setup-wizard.py -o /tmp/tnd-setup.py && python3 /tmp/tnd-setup.py'
    ```
 
    Laisser cette fenêtre ouverte : elle affiche l'adresse de l'assistant.
