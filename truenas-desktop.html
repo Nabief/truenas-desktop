@@ -13456,6 +13456,8 @@ if (typeof renderLibvirt2Detail === 'function' && !window._lv2DetailTabsWrapped)
     }
 
     modal.classList.add('open');
+    modal.style.display = 'flex';
+    modal.setAttribute('aria-hidden', 'false');
     modal.onclick = function (event) {
       if (event.target === modal && typeof closeCatalogDetail === 'function') {
         closeCatalogDetail();
