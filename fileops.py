@@ -39,7 +39,7 @@ VM_DIR     = os.environ.get('VM_DIR',  '/mnt/Truenas_Stockage/vms')
 ISO_DIR    = os.environ.get('ISO_DIR', '/mnt/Truenas_Stockage')
 
 # ── Version & mise à jour ─────────────────────────────────────────────────────
-APP_VERSION = '1.1.0'
+APP_VERSION = '1.1.1'
 APP_DIR     = os.environ.get('APP_DIR', '')  # dossier d'install (contient fileops.py, HTML…)
 GITHUB_RAW  = os.environ.get('GITHUB_RAW', 'https://raw.githubusercontent.com/Nabief/truenas-desktop/main').rstrip('/')
 
@@ -368,9 +368,13 @@ def _do_update():
     updated = []
     for f in ('fileops.py', 'truenas-desktop.html', 'vnc-viewer.html'):
         dst = os.path.join(APP_DIR, f)
-        tmp = dst + '.new'
-        urllib.request.urlretrieve(GITHUB_RAW + '/' + f, tmp)
-        os.replace(tmp, dst)
+        req = urllib.request.Request(GITHUB_RAW + '/' + f, headers={'User-Agent': 'TrueNAS-Desktop'})
+        with urllib.request.urlopen(req, timeout=60) as r:
+            data = r.read()
+        # Écriture SUR PLACE (même inode) : indispensable pour que les bind-mounts
+        # de fichier unique (nginx/fileops) voient le nouveau contenu.
+        with open(dst, 'wb') as fh:
+            fh.write(data)
         updated.append(f)
     html = os.path.join(APP_DIR, 'truenas-desktop.html')
     try:
@@ -388,7 +392,10 @@ def _schedule_self_restart():
     def _r():
         _sh_time.sleep(1.5)
         try:
-            ssh_exec("sudo -n docker restart truenas-fileops", timeout=30)
+            # Redémarre le bureau (nginx) puis le sidecar. Avec l'écriture sur place
+            # ce n'est plus strictement nécessaire pour le HTML, mais garantit la
+            # prise en compte du nouveau fileops.py.
+            ssh_exec("sudo -n docker restart truenas-desktop truenas-fileops", timeout=45)
         except Exception:
             pass
     _threading.Thread(target=_r, daemon=True).start()

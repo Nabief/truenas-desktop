@@ -7241,21 +7241,21 @@ function dlBrowserPanel() {
   document.getElementById('create-app-title').textContent = 'Ajouter depuis le navigateur';
   var box = document.getElementById('create-app-form');
   var base = location.origin + '/fileops', tok = getFileopsToken();
-  var h = '<div style="display:flex;flex-direction:column;gap:14px;">';
-  h += '<div class="tnd-panel tnd-panel-pad"><div class="tnd-title" style="margin-bottom:6px;">Bookmarklet — rapide, sans installation</div>'
-    + '<div class="tnd-hint" style="margin-bottom:10px;">Fais glisser ce bouton dans ta barre de favoris. Ensuite, sur n\'importe quel site : sélectionne un ou plusieurs liens (ou rien pour détecter automatiquement les liens d\'hébergeurs), puis clique le favori — les liens partent dans la file du NAS.</div>'
-    + '<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">'
-    + '<a id="dl-bm-link" class="fs-btn" style="text-decoration:none;background:rgba(0,120,212,0.2);border-color:rgba(0,120,212,0.35);color:var(--accent2);padding:8px 16px;cursor:grab;">📥 Envoyer au NAS</a>'
-    + '<button class="fs-btn" onclick="dlCopyBookmarklet()">📋 Copier le code</button>'
+  var h = '<div style="display:flex;flex-direction:column;gap:20px;padding:6px 4px;">';
+  h += '<div class="tnd-panel" style="padding:20px 22px;"><div class="tnd-title" style="margin-bottom:12px;">Bookmarklet — rapide, sans installation</div>'
+    + '<div class="tnd-hint" style="margin-bottom:18px;line-height:1.7;">Fais glisser ce bouton dans ta barre de favoris. Ensuite, sur n\'importe quel site : sélectionne un ou plusieurs liens (ou rien pour détecter automatiquement les liens d\'hébergeurs), puis clique le favori — les liens partent dans la file du NAS.</div>'
+    + '<div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap;">'
+    + '<a id="dl-bm-link" class="fs-btn" style="text-decoration:none;background:rgba(0,120,212,0.2);border-color:rgba(0,120,212,0.35);color:var(--accent2);padding:11px 20px;cursor:grab;">📥 Envoyer au NAS</a>'
+    + '<button class="fs-btn" style="padding:11px 18px;" onclick="dlCopyBookmarklet()">📋 Copier le code</button>'
     + '</div></div>';
-  h += '<div class="tnd-panel tnd-panel-pad"><div class="tnd-title" style="margin-bottom:6px;">Extension navigateur — clic droit (Chrome/Edge & Firefox)</div>'
-    + '<div style="margin-bottom:10px;"><a class="fs-btn" href="https://github.com/Nabief/truenas-desktop/raw/main/truenas-dl-extension.zip" target="_blank" rel="noopener" style="text-decoration:none;background:rgba(62,207,142,0.15);border-color:rgba(62,207,142,0.3);color:var(--success);padding:8px 16px;">⬇ Télécharger l\'extension (.zip)</a></div>'
-    + '<div class="tnd-hint" style="margin-bottom:10px;">Décompresse le zip, puis dans <code>chrome://extensions</code> → active le <b>Mode développeur</b> → <b>Charger l\'extension non empaquetée</b> → sélectionne le dossier décompressé. Dans ses <b>options</b>, colle ces deux valeurs :</div>'
-    + '<div class="tnd-code" style="display:flex;flex-direction:column;gap:8px;">'
-    + '<div style="display:flex;gap:8px;align-items:center;"><span style="color:var(--text-dim);min-width:64px;">URL</span><span style="flex:1;word-break:break-all;">' + base + '</span><button class="fs-btn" style="font-size:11px;padding:4px 9px;" onclick="copyText(\'' + encodeURIComponent(base) + '\')">📋</button></div>'
-    + '<div style="display:flex;gap:8px;align-items:center;"><span style="color:var(--text-dim);min-width:64px;">Jeton</span><span style="flex:1;word-break:break-all;">' + String(tok).replace(/</g,'&lt;') + '</span><button class="fs-btn" style="font-size:11px;padding:4px 9px;" onclick="copyText(\'' + encodeURIComponent(tok) + '\')">📋</button></div>'
+  h += '<div class="tnd-panel" style="padding:20px 22px;"><div class="tnd-title" style="margin-bottom:14px;">Extension navigateur — clic droit (Chrome/Edge & Firefox)</div>'
+    + '<div style="margin-bottom:18px;"><a class="fs-btn" href="https://github.com/Nabief/truenas-desktop/raw/main/truenas-dl-extension.zip" target="_blank" rel="noopener" style="text-decoration:none;background:rgba(62,207,142,0.15);border-color:rgba(62,207,142,0.3);color:var(--success);padding:11px 20px;">⬇ Télécharger l\'extension (.zip)</a></div>'
+    + '<div class="tnd-hint" style="margin-bottom:18px;line-height:1.7;">Décompresse le zip, puis dans <code>chrome://extensions</code> → active le <b>Mode développeur</b> → <b>Charger l\'extension non empaquetée</b> → sélectionne le dossier décompressé. Dans ses <b>options</b>, colle ces deux valeurs :</div>'
+    + '<div class="tnd-code" style="display:flex;flex-direction:column;gap:14px;padding:16px 18px;">'
+    + '<div style="display:flex;gap:14px;align-items:center;"><span style="color:var(--text-dim);min-width:68px;">URL</span><span style="flex:1;word-break:break-all;">' + base + '</span><button class="fs-btn" style="font-size:11px;padding:6px 11px;" onclick="copyText(\'' + encodeURIComponent(base) + '\')">📋</button></div>'
+    + '<div style="display:flex;gap:14px;align-items:center;"><span style="color:var(--text-dim);min-width:68px;">Jeton</span><span style="flex:1;word-break:break-all;">' + String(tok).replace(/</g,'&lt;') + '</span><button class="fs-btn" style="font-size:11px;padding:6px 11px;" onclick="copyText(\'' + encodeURIComponent(tok) + '\')">📋</button></div>'
     + '</div></div>';
-  h += '<div style="text-align:right;"><button class="fs-btn" onclick="openDownloads()">← Retour</button></div></div>';
+  h += '<div style="text-align:right;padding-top:6px;"><button class="fs-btn" style="padding:10px 20px;" onclick="openDownloads()">← Retour</button></div></div>';
   box.innerHTML = h;
   var a = document.getElementById('dl-bm-link');
   if (a) a.href = dlBookmarkletHref();
