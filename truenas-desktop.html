@@ -1307,6 +1307,30 @@ select option{ background:#101b2e; color:#e8edf5; }
     font-size:12px; line-height:1.55; color:var(--text-dim, #a8b3ca);
   }
 
+  /* Coloration JSON (overlay pre coloré derrière un textarea transparent) */
+  .jh-wrap { position:relative; }
+  .jh-wrap textarea {
+    position:relative; z-index:1;
+    background:transparent !important; color:transparent !important;
+    caret-color:var(--text,#e8edf5);
+  }
+  .jh-wrap .jh-pre {
+    position:absolute; inset:0; margin:0; z-index:0; pointer-events:none;
+    overflow:auto; white-space:pre; word-wrap:normal;
+    box-sizing:border-box; padding:10px;
+    border:1px solid transparent; border-radius:8px;
+    background:rgba(0,0,0,.3);
+    font-family:ui-monospace,Menlo,Consolas,monospace; font-size:11px; line-height:1.45;
+    color:var(--text,#e8edf5); tab-size:2;
+  }
+  .jh-wrap .jh-pre code { font:inherit; }
+  .jh-key  { color:#7dd3fc; }
+  .jh-str  { color:#a5d6a7; }
+  .jh-num  { color:#f0b429; }
+  .jh-bool { color:#c792ea; }
+  .jh-null { color:#c792ea; }
+  .jh-punc { color:#8a9bbf; }
+
 /* MDM-INSTALLED-APP-EDIT-CSS-BEGIN */
 #modal-create-app.dl-wide > div {
   width: min(900px, 95vw) !important;
@@ -8472,6 +8496,43 @@ async function catalogYamlInstall() {
     if (btn) btn.disabled = false;
   }
 }
+// ── Coloration JSON d'un textarea (overlay) ──
+function jsonHighlight(code) {
+  code = String(code == null ? '' : code)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  return code.replace(
+    /("(?:\\.|[^"\\])*"(\s*:)?)|\b(true|false)\b|\bnull\b|(-?\d+(?:\.\d+)?(?:[eE][+\-]?\d+)?)|([{}\[\],])/g,
+    function (m, str, colon, bool, num, punc) {
+      if (str) return '<span class="jh-' + (colon ? 'key' : 'str') + '">' + m + '</span>';
+      if (bool) return '<span class="jh-bool">' + m + '</span>';
+      if (num) return '<span class="jh-num">' + m + '</span>';
+      if (punc) return '<span class="jh-punc">' + m + '</span>';
+      if (m === 'null') return '<span class="jh-null">null</span>';
+      return m;
+    }
+  );
+}
+function attachJsonHighlight(ta) {
+  if (!ta || ta._jhAttached) return;
+  ta._jhAttached = true;
+  var wrap = document.createElement('div');
+  wrap.className = 'jh-wrap';
+  var pre = document.createElement('pre');
+  pre.className = 'jh-pre';
+  var codeEl = document.createElement('code');
+  pre.appendChild(codeEl);
+  ta.parentNode.insertBefore(wrap, ta);
+  wrap.appendChild(pre);
+  wrap.appendChild(ta);
+  function upd() {
+    codeEl.innerHTML = jsonHighlight(ta.value) + '\n';
+    pre.scrollTop = ta.scrollTop; pre.scrollLeft = ta.scrollLeft;
+  }
+  ta.addEventListener('input', upd);
+  ta.addEventListener('scroll', function () { pre.scrollTop = ta.scrollTop; pre.scrollLeft = ta.scrollLeft; });
+  ta._jhUpdate = upd;
+  upd();
+}
 function catalogFilter(q) {
   const el = document.getElementById('catalog-content');
   if (!el) return;
@@ -13523,9 +13584,9 @@ if (typeof renderLibvirt2Detail === 'function' && !window._lv2DetailTabsWrapped)
       '</div>' +
       '<div class="form-group" style="margin-top:14px;margin-bottom:0;">' +
         '<label>Valeurs de configuration JSON</label>' +
-        '<textarea id="ci-values" style="width:100%;height:150px;background:rgba(0,0,0,.3);' +
+        '<textarea id="ci-values" spellcheck="false" style="width:100%;height:150px;box-sizing:border-box;background:rgba(0,0,0,.3);' +
           'border:1px solid rgba(255,255,255,.12);border-radius:8px;padding:10px;' +
-          'color:var(--text);font-family:monospace;font-size:11px;resize:vertical;">{}</textarea>' +
+          'color:var(--text);font-family:ui-monospace,Menlo,Consolas,monospace;font-size:11px;line-height:1.45;resize:vertical;">{}</textarea>' +
       '</div>' +
       '<div id="ci-status" style="min-height:20px;margin-top:10px;font-size:11px;color:var(--text-dim);"></div>' +
       '<div style="display:flex;gap:8px;justify-content:flex-end;margin-top:12px;">' +
@@ -13536,6 +13597,7 @@ if (typeof renderLibvirt2Detail === 'function' && !window._lv2DetailTabsWrapped)
       '</div>';
 
     modal.style.display = 'flex';
+    attachJsonHighlight(document.getElementById('ci-values'));
     document.getElementById('ci-train').addEventListener('change', refreshCatalogVersionV3);
     refreshCatalogVersionV3();
   }
@@ -13608,6 +13670,7 @@ if (typeof renderLibvirt2Detail === 'function' && !window._lv2DetailTabsWrapped)
         var _cur = _ta ? (_ta.value || '').trim() : '';
         if (_ta && (_cur === '' || _cur === '{}')) {
           _ta.value = JSON.stringify(ciSchemaDefaults(_q), null, 2);
+          if (_ta._jhUpdate) _ta._jhUpdate();
         }
       }
     } catch (e) {}
