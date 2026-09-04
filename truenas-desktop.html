@@ -3727,15 +3727,20 @@ function fsCut() {
 }
 async function fsPaste() {
   if (!_fsClipboard || !_fsClipboard.items || !_fsClipboard.items.length) return;
-  let okc = 0, errc = 0, lastErr = '';
-  for (const it of _fsClipboard.items) {
-    const dst = (currentFsPath.endsWith('/') ? currentFsPath : currentFsPath + '/') + it.name;
+  const wasCut = _fsClipboard.cut;
+  const items = _fsClipboard.items;
+  const base = fsActiveTabPath ? fsActiveTabPath() : currentFsPath;
+  const prog = fsOp(wasCut ? 'Déplacement…' : 'Copie…');
+  let okc = 0, errc = 0, lastErr = '', i = 0;
+  for (const it of items) {
+    i++; prog.update(i, items.length, it.name);
+    const dst = (base.endsWith('/') ? base : base + '/') + it.name;
     if (dst === it.path) { errc++; lastErr = 'même dossier'; continue; }
-    try { await fileops('POST', _fsClipboard.cut ? 'move' : 'copy', { src: it.path, dst }); okc++; }
+    try { await fileops('POST', wasCut ? 'move' : 'copy', { src: it.path, dst }); okc++; }
     catch(e) { errc++; lastErr = e.message; }
   }
-  if (_fsClipboard.cut) _fsClipboard = null;
-  toast((_fsClipboard === null ? '✅ Déplacé : ' : '✅ Collé : ') + okc + (errc ? ' · ' + errc + ' échec(s) (' + lastErr + ')' : ''));
+  if (wasCut) _fsClipboard = null;
+  prog.done((wasCut ? 'Déplacé : ' : 'Collé : ') + okc + ' élément(s)' + (errc ? ' · ' + errc + ' échec(s) — ' + lastErr : ''), errc > 0);
   fsRefresh();
 }
 
@@ -5781,12 +5786,14 @@ async function fsDeleteSelected() {
     ? `Supprimer <strong>${list.length} éléments</strong> ?<br><span style="font-size:12px;color:var(--danger);">Cette action est irréversible.</span>`
     : `Supprimer <strong>${list[0].name}</strong> ?<br><span style="font-size:12px;color:var(--danger);">Cette action est irréversible.</span>`;
   if (!await showConfirm(msg, {danger:true, ok:"Supprimer"})) return;
-  let okc = 0, errc = 0, lastErr = '';
+  const prog = fsOp('Suppression…');
+  let okc = 0, errc = 0, lastErr = '', i = 0;
   for (const it of list) {
+    i++; prog.update(i, list.length, it.name);
     try { await fileops('DELETE', 'delete', { path: it.path, recursive: it.type === 'DIRECTORY' }); okc++; }
     catch(e) { errc++; lastErr = e.message; }
   }
-  toast('🗑️ ' + okc + ' supprimé' + (okc>1?'s':'') + (errc ? ' · ' + errc + ' échec(s) (' + lastErr + ')' : ''));
+  prog.done(okc + ' supprimé' + (okc>1?'s':'') + (errc ? ' · ' + errc + ' échec(s) — ' + lastErr : ''), errc > 0);
   fsDeselect();
   fsRefresh();
 }
@@ -9865,21 +9872,56 @@ function fsPickFolder(startPath, cb) {
   document.getElementById('modal-filepicker').style.display = 'flex';
   _fpLoad(_fpCurPath);
 }
+// ── Indicateur de progression des opérations fichiers ──
+function fsOp(label) {
+  var el = document.getElementById('fs-op');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'fs-op';
+    el.style.cssText = 'position:fixed;bottom:72px;right:20px;z-index:6000;min-width:290px;max-width:380px;'
+      + 'background:var(--glass,#131f34);border:1px solid var(--glass-border,rgba(255,255,255,.12));'
+      + 'border-radius:12px;box-shadow:0 14px 44px rgba(0,0,0,.5);padding:14px 16px;color:var(--text,#e8edf5);font-size:13px;';
+    document.body.appendChild(el);
+  }
+  el.style.display = 'block';
+  if (fsOp._t) { clearTimeout(fsOp._t); fsOp._t = null; }
+  return {
+    update: function (i, n, name) {
+      var pct = n ? Math.round(i / n * 100) : 0;
+      el.innerHTML =
+        '<div style="display:flex;align-items:center;gap:9px;margin-bottom:9px;">'
+        + '<div class="spinner" style="width:15px;height:15px;flex:0 0 auto;"></div>'
+        + '<b style="flex:1;">' + label + '</b>'
+        + '<span style="color:var(--text-dim);font-size:11px;">' + i + ' / ' + n + '</span></div>'
+        + '<div style="height:7px;border-radius:5px;background:rgba(255,255,255,.1);overflow:hidden;margin-bottom:7px;">'
+        + '<div style="height:100%;width:' + pct + '%;background:linear-gradient(90deg,#0078d4,#00e0ff);transition:width .2s;"></div></div>'
+        + '<div style="font-size:11px;color:var(--text-dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' + String(name || '').replace(/</g, '&lt;') + '</div>';
+    },
+    done: function (msg, isError) {
+      el.innerHTML = '<div style="display:flex;align-items:flex-start;gap:9px;line-height:1.5;">'
+        + '<span style="font-size:15px;flex:0 0 auto;">' + (isError ? '⚠️' : '✅') + '</span>'
+        + '<span style="flex:1;word-break:break-word;">' + String(msg).replace(/</g, '&lt;') + '</span></div>';
+      fsOp._t = setTimeout(function () { if (el) el.style.display = 'none'; }, isError ? 7000 : 3500);
+    }
+  };
+}
 function fsMoveTo() { _fsTransfer('move'); }
 function fsCopyTo() { _fsTransfer('copy'); }
 function _fsTransfer(op) {
   const list = fsSelList();
   if (!list.length) { toast('Sélectionnez un élément'); return; }
-  fsPickFolder(currentFsPath, async function(destDir){
+  fsPickFolder(fsActiveTabPath ? fsActiveTabPath() : currentFsPath, async function(destDir){
     if (!destDir) return;
-    let okc = 0, errc = 0, lastErr = '';
+    const prog = fsOp(op === 'move' ? 'Déplacement…' : 'Copie…');
+    let okc = 0, errc = 0, lastErr = '', i = 0;
     for (const it of list) {
+      i++; prog.update(i, list.length, it.name);
       const dst = destDir.replace(/\/$/, '') + '/' + it.name;
-      if (dst === it.path) { errc++; lastErr = 'même dossier'; continue; }
+      if (dst === it.path || destDir.replace(/\/$/, '') === it.path.replace(/\/[^\/]+$/, '')) { errc++; lastErr = 'déjà dans ce dossier'; continue; }
       try { await fileops('POST', op, { src: it.path, dst: dst }); okc++; }
       catch(e) { errc++; lastErr = e.message; }
     }
-    toast((op === 'move' ? '✅ Déplacé : ' : '✅ Copié : ') + okc + (errc ? ' · ' + errc + ' échec(s) (' + lastErr + ')' : ''));
+    prog.done((op === 'move' ? 'Déplacé : ' : 'Copié : ') + okc + ' élément(s)' + (errc ? ' · ' + errc + ' échec(s) — ' + lastErr : ''), errc > 0);
     fsDeselect(); fsRefresh();
   });
 }
