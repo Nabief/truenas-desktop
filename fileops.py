@@ -6859,7 +6859,17 @@ class FileOpsHandler(BaseHTTPRequestHandler):
                     try:
                         os.rename(src, dst)
                     except OSError:
-                        _shutil.move(src, dst)
+                        # Entre systèmes de fichiers (datasets ZFS) : copie PUIS
+                        # suppression explicite de la source (toute erreur remonte).
+                        if os.path.isdir(src):
+                            _shutil.copytree(src, dst, symlinks=True)
+                            _shutil.rmtree(src)
+                        else:
+                            _shutil.copy2(src, dst)
+                            os.remove(src)
+                    # Vérifie que la source a bien disparu.
+                    if os.path.exists(src):
+                        raise RuntimeError('Déplacement incomplet : la source subsiste (' + src + ')')
                 self._json(200, {'ok': True})
             except (ValueError, PermissionError) as e:
                 self._json(400, {'error': str(e)})
