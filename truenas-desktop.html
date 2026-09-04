@@ -3730,17 +3730,19 @@ async function fsPaste() {
   const wasCut = _fsClipboard.cut;
   const items = _fsClipboard.items;
   const base = fsActiveTabPath ? fsActiveTabPath() : currentFsPath;
+  const op = wasCut ? 'move' : 'copy';
   const prog = fsOp(wasCut ? 'Déplacement…' : 'Copie…');
-  let okc = 0, errc = 0, lastErr = '', i = 0;
+  let okc = 0, errc = 0, skc = 0, lastErr = '', i = 0; const ctx = { batch: null };
   for (const it of items) {
     i++; prog.update(i, items.length, it.name);
     const dst = (base.endsWith('/') ? base : base + '/') + it.name;
     if (dst === it.path) { errc++; lastErr = 'même dossier'; continue; }
-    try { await fileops('POST', wasCut ? 'move' : 'copy', { src: it.path, dst }); okc++; }
-    catch(e) { errc++; lastErr = e.message; }
+    const r = await fsRunWithConflict(op, it.path, { src: it.path, dst: dst, name: it.name }, ctx);
+    if (r === 'ok') okc++; else if (r === 'skip') skc++; else { errc++; lastErr = r.slice(4); }
   }
   if (wasCut) _fsClipboard = null;
-  prog.done((wasCut ? 'Déplacé : ' : 'Collé : ') + okc + ' élément(s)' + (errc ? ' · ' + errc + ' échec(s) — ' + lastErr : ''), errc > 0);
+  prog.done((wasCut ? 'Déplacé : ' : 'Collé : ') + okc + ' élément(s)'
+    + (skc ? ' · ' + skc + ' ignoré(s)' : '') + (errc ? ' · ' + errc + ' échec(s) — ' + lastErr : ''), errc > 0);
   fsRefresh();
 }
 
@@ -9905,6 +9907,52 @@ function fsOp(label) {
     }
   };
 }
+// Dialogue de conflit : Écraser / Garder les deux / Annuler (+ appliquer à tout).
+function fsConflictDialog(name) {
+  return new Promise(function (resolve) {
+    var ov = document.createElement('div');
+    ov.style.cssText = 'position:fixed;inset:0;z-index:7000;background:rgba(0,0,0,.55);backdrop-filter:blur(4px);display:flex;align-items:center;justify-content:center;';
+    ov.innerHTML = '<div class="tnd-panel tnd-panel-pad" style="width:min(460px,94vw);display:flex;flex-direction:column;gap:14px;box-shadow:0 24px 70px rgba(0,0,0,.5);">'
+      + '<div style="font-weight:700;font-size:15px;">Le fichier existe déjà</div>'
+      + '<div class="tnd-hint" style="line-height:1.6;"><b>' + String(name).replace(/</g, '&lt;') + '</b> existe déjà dans la destination. Que veux-tu faire ?</div>'
+      + '<label class="tnd-switch" style="display:flex;gap:10px;align-items:center;justify-content:space-between;font-size:12px;"><span>Appliquer à tous les conflits suivants</span><input type="checkbox" id="fsc-all"></label>'
+      + '<div style="display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap;">'
+      + '<button class="fs-btn" data-a="cancel">Annuler</button>'
+      + '<button class="fs-btn" data-a="rename">Garder les deux</button>'
+      + '<button class="fs-btn" data-a="overwrite" style="background:rgba(240,180,41,.18);border-color:rgba(240,180,41,.4);color:#f0b429;">Écraser</button>'
+      + '</div></div>';
+    document.body.appendChild(ov);
+    ov.querySelectorAll('button[data-a]').forEach(function (b) {
+      b.onclick = function () {
+        var all = !!(ov.querySelector('#fsc-all') && ov.querySelector('#fsc-all').checked);
+        ov.remove();
+        resolve({ action: b.getAttribute('data-a'), all: all });
+      };
+    });
+  });
+}
+// Exécute une opération fichier avec gestion des conflits ; retourne 'ok'|'skip'|'err:msg'.
+async function fsRunWithConflict(op, src, dstOrBody, ctx) {
+  var body = (typeof dstOrBody === 'object') ? dstOrBody : { src: src, dst: dstOrBody };
+  var conflict = ctx.batch || 'error';
+  while (true) {
+    try {
+      body.conflict = conflict;
+      await fileops('POST', op, body);
+      return 'ok';
+    } catch (e) {
+      var msg = e && e.message ? e.message : String(e);
+      if (conflict === 'error' && /existe déjà|already exists/i.test(msg)) {
+        var res = await fsConflictDialog(body.name || (body.dst || '').split('/').pop());
+        if (res.action === 'cancel') return 'skip';
+        conflict = res.action;
+        if (res.all) ctx.batch = res.action;
+      } else {
+        return 'err:' + msg;
+      }
+    }
+  }
+}
 function fsMoveTo() { _fsTransfer('move'); }
 function fsCopyTo() { _fsTransfer('copy'); }
 function _fsTransfer(op) {
@@ -9913,15 +9961,16 @@ function _fsTransfer(op) {
   fsPickFolder(fsActiveTabPath ? fsActiveTabPath() : currentFsPath, async function(destDir){
     if (!destDir) return;
     const prog = fsOp(op === 'move' ? 'Déplacement…' : 'Copie…');
-    let okc = 0, errc = 0, lastErr = '', i = 0;
+    let okc = 0, errc = 0, skc = 0, lastErr = '', i = 0; const ctx = { batch: null };
     for (const it of list) {
       i++; prog.update(i, list.length, it.name);
       const dst = destDir.replace(/\/$/, '') + '/' + it.name;
-      if (dst === it.path || destDir.replace(/\/$/, '') === it.path.replace(/\/[^\/]+$/, '')) { errc++; lastErr = 'déjà dans ce dossier'; continue; }
-      try { await fileops('POST', op, { src: it.path, dst: dst }); okc++; }
-      catch(e) { errc++; lastErr = e.message; }
+      if (dst === it.path) { errc++; lastErr = 'déjà dans ce dossier'; continue; }
+      const r = await fsRunWithConflict(op, it.path, { src: it.path, dst: dst, name: it.name }, ctx);
+      if (r === 'ok') okc++; else if (r === 'skip') skc++; else { errc++; lastErr = r.slice(4); }
     }
-    prog.done((op === 'move' ? 'Déplacé : ' : 'Copié : ') + okc + ' élément(s)' + (errc ? ' · ' + errc + ' échec(s) — ' + lastErr : ''), errc > 0);
+    prog.done((op === 'move' ? 'Déplacé : ' : 'Copié : ') + okc + ' élément(s)'
+      + (skc ? ' · ' + skc + ' ignoré(s)' : '') + (errc ? ' · ' + errc + ' échec(s) — ' + lastErr : ''), errc > 0);
     fsDeselect(); fsRefresh();
   });
 }

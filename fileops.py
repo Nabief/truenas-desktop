@@ -39,7 +39,7 @@ VM_DIR     = os.environ.get('VM_DIR',  '/mnt/Truenas_Stockage/vms')
 ISO_DIR    = os.environ.get('ISO_DIR', '/mnt/Truenas_Stockage')
 
 # ── Version & mise à jour ─────────────────────────────────────────────────────
-APP_VERSION = '1.1.9'
+APP_VERSION = '1.2.0'
 APP_DIR     = os.environ.get('APP_DIR', '')  # dossier d'install (contient fileops.py, HTML…)
 GITHUB_RAW  = os.environ.get('GITHUB_RAW', 'https://raw.githubusercontent.com/Nabief/truenas-desktop/main').rstrip('/')
 
@@ -276,6 +276,28 @@ def _privileged_remove(path):
             raise RuntimeError('Suppression impossible : ' + str(local_err) + ' / SSH: ' + str(ssh_err))
         if code != 0 or os.path.exists(path):
             raise RuntimeError('Suppression refusée (' + (err or out or str(local_err)).strip()[:200] + ')')
+
+
+def _unique_path(dst):
+    """Retourne un chemin libre à partir de dst : name (1).ext, name (2).ext…"""
+    if not os.path.exists(dst):
+        return dst
+    d = os.path.dirname(dst)
+    base = os.path.basename(dst.rstrip('/'))
+    # Gère .tar.gz / .tar.bz2 comme extension composée.
+    low = base.lower()
+    for comp in ('.tar.gz', '.tar.bz2', '.tar.xz'):
+        if low.endswith(comp):
+            stem, ext = base[:-len(comp)], base[-len(comp):]
+            break
+    else:
+        stem, ext = os.path.splitext(base)
+    i = 1
+    while True:
+        cand = os.path.join(d, stem + ' (' + str(i) + ')' + ext)
+        if not os.path.exists(cand):
+            return cand
+        i += 1
 
 
 # ── libvirt / virsh helpers ───────────────────────────────────────────────────
@@ -6867,8 +6889,14 @@ class FileOpsHandler(BaseHTTPRequestHandler):
                     raise ValueError('Source introuvable')
                 if os.path.realpath(src) == os.path.realpath(dst):
                     raise ValueError('Source et destination identiques')
+                conflict = str(body.get('conflict', 'error'))
                 if os.path.exists(dst):
-                    raise ValueError('La destination existe déjà')
+                    if conflict == 'overwrite':
+                        _privileged_remove(dst)
+                    elif conflict == 'rename':
+                        dst = _unique_path(dst)
+                    else:
+                        raise ValueError('La destination existe déjà')
                 parent = os.path.dirname(dst.rstrip('/'))
                 if not os.path.isdir(parent):
                     raise ValueError('Dossier de destination inexistant')
@@ -6896,7 +6924,7 @@ class FileOpsHandler(BaseHTTPRequestHandler):
                     # Vérifie que la source a bien disparu.
                     if os.path.exists(src):
                         raise RuntimeError('Déplacement incomplet : la source subsiste (' + src + ')')
-                self._json(200, {'ok': True})
+                self._json(200, {'ok': True, 'dst': dst, 'name': os.path.basename(dst.rstrip('/'))})
             except (ValueError, PermissionError) as e:
                 self._json(400, {'error': str(e)})
             except Exception as e:
