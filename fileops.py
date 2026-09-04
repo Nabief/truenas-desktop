@@ -256,6 +256,28 @@ def shq(s):
     return "'" + str(s).replace("'", "'\\''") + "'"
 
 
+def _privileged_remove(path):
+    """Supprime un fichier/dossier. Essaie localement (conteneur root) puis, en cas
+    d'échec (ACL ZFS/NFSv4 refusant la suppression), bascule sur 'sudo rm' côté host
+    via SSH — le vrai root du système, qui a l'accès complet aux datasets."""
+    path = str(path or '')
+    if not path or not os.path.exists(path):
+        return
+    try:
+        if os.path.isdir(path) and not os.path.islink(path):
+            _sh_shutil.rmtree(path)
+        else:
+            os.remove(path)
+        return
+    except Exception as local_err:
+        try:
+            out, err, code = ssh_exec("sudo -n rm -rf " + shq(path), timeout=90)
+        except Exception as ssh_err:
+            raise RuntimeError('Suppression impossible : ' + str(local_err) + ' / SSH: ' + str(ssh_err))
+        if code != 0 or os.path.exists(path):
+            raise RuntimeError('Suppression refusée (' + (err or out or str(local_err)).strip()[:200] + ')')
+
+
 # ── libvirt / virsh helpers ───────────────────────────────────────────────────
 # MDM-SUDO-VIRSH-26 : commandes libvirt exécutées via sudo non interactif.
 VIRSH_URI = 'qemu:///system'
@@ -6863,10 +6885,9 @@ class FileOpsHandler(BaseHTTPRequestHandler):
                         # suppression explicite de la source (toute erreur remonte).
                         if os.path.isdir(src):
                             _shutil.copytree(src, dst, symlinks=True)
-                            _shutil.rmtree(src)
                         else:
                             _shutil.copy2(src, dst)
-                            os.remove(src)
+                        _privileged_remove(src)
                     # Vérifie que la source a bien disparu.
                     if os.path.exists(src):
                         raise RuntimeError('Déplacement incomplet : la source subsiste (' + src + ')')
@@ -7597,11 +7618,9 @@ class FileOpsHandler(BaseHTTPRequestHandler):
             try:
                 body = self._body()
                 target = body.get('path', '')
-                if body.get('recursive'):
-                    import shutil
-                    shutil.rmtree(target)
-                else:
-                    os.remove(target)
+                if not target:
+                    raise ValueError('Chemin requis')
+                _privileged_remove(target)
                 self._json(200, {'ok': True})
             except Exception as e:
                 self._json(500, {'error': str(e)})
