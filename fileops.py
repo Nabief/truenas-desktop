@@ -39,7 +39,7 @@ VM_DIR     = os.environ.get('VM_DIR',  '/mnt/Truenas_Stockage/vms')
 ISO_DIR    = os.environ.get('ISO_DIR', '/mnt/Truenas_Stockage')
 
 # ── Version & mise à jour ─────────────────────────────────────────────────────
-APP_VERSION = '1.2.2'
+APP_VERSION = '1.2.3'
 APP_DIR     = os.environ.get('APP_DIR', '')  # dossier d'install (contient fileops.py, HTML…)
 GITHUB_RAW  = os.environ.get('GITHUB_RAW', 'https://raw.githubusercontent.com/Nabief/truenas-desktop/main').rstrip('/')
 
@@ -3878,6 +3878,22 @@ def _php_save(version, ini, extensions):
     data[version] = {'ini': clean_ini, 'extensions': clean_ext}
     _php_profiles_write(data)
     _php_write_conf(version, bump_ext=changed_ext)
+    # Applique directement via le host (le watcher interne du conteneur peut être
+    # cassé selon l'échappement de la compose). install-php-extensions compile :
+    # on lance en tâche de fond puis on recharge php-fpm (kill -USR2 1).
+    cont = 'truenas-php' + version.replace('.', '')
+
+    def _php_apply_bg():
+        try:
+            if clean_ext:
+                inner = 'install-php-extensions ' + ' '.join(clean_ext) + ' >/dev/null 2>&1; kill -USR2 1 2>/dev/null || true'
+            else:
+                inner = 'kill -USR2 1 2>/dev/null || true'
+            ssh_exec('sudo -n docker exec ' + cont + ' sh -c ' + shq(inner), timeout=600)
+        except Exception as e:
+            log.warning('php ext apply (ssh) error: %s', e)
+
+    _threading.Thread(target=_php_apply_bg, daemon=True).start()
     return data[version], changed_ext
 # ── MDM-WEBSITES-V1-END ─────────────────────────────────────────────────────
 
