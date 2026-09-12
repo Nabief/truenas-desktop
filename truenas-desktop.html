@@ -5010,6 +5010,7 @@ async function webRenderList() {
       + '<button class="fs-btn" onclick="webDbView()" title="Bases de données MariaDB">🛢 Bases</button>'
       + '<button class="fs-btn" onclick="webPhpSettings()">⚙ PHP</button>'
       + '<button class="fs-btn" onclick="webAppInstallForm()" title="Installer WordPress, Nextcloud…">📦 Installer une app</button>'
+      + '<button class="fs-btn" onclick="webReimport()" title="Recréer les entrées à partir des dossiers présents dans le dataset Web">♻ Ré-importer</button>'
       + '<button class="fs-btn" style="background:rgba(62,207,142,0.15);border-color:rgba(62,207,142,0.3);color:var(--success);" onclick="webNewForm()">+ Site</button>'
       + '</span>'
       + '</div>';
@@ -5311,6 +5312,15 @@ async function webMkdir() {
     const el = document.getElementById('web-root'); if (el) el.value = r.path;
     toast(r.existed ? ('📁 Dossier existant : ' + r.path) : ('📁 Dossier créé : ' + r.path));
   } catch(e) { toast('❌ ' + e.message); }
+}
+async function webReimport() {
+  if (!await showConfirm('Rescanner le dataset Web et recréer les entrées manquantes ?<br><span style="font-size:12px;color:var(--text-dim);">Les dossiers non enregistrés seront ajoutés (statique, ou PHP si un .php est présent). Type/domaine ajustables ensuite.</span>')) return;
+  try {
+    const r = await fileops('POST', 'websites/reimport', {});
+    if (r && r.count) toast('✅ ' + r.count + ' site(s) ré-importé(s) : ' + (r.imported || []).join(', '));
+    else toast('Aucun nouveau site à importer (déjà tous enregistrés).');
+    webRenderList();
+  } catch (e) { toast('❌ ' + (e && e.message ? e.message : e)); }
 }
 async function webCreateDataset() {
   const target = _webDataset || 'un dataset Web';

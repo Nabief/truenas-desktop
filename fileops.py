@@ -39,7 +39,7 @@ VM_DIR     = os.environ.get('VM_DIR',  '/mnt/Truenas_Stockage/vms')
 ISO_DIR    = os.environ.get('ISO_DIR', '/mnt/Truenas_Stockage')
 
 # ── Version & mise à jour ─────────────────────────────────────────────────────
-APP_VERSION = '1.2.1'
+APP_VERSION = '1.2.2'
 APP_DIR     = os.environ.get('APP_DIR', '')  # dossier d'install (contient fileops.py, HTML…)
 GITHUB_RAW  = os.environ.get('GITHUB_RAW', 'https://raw.githubusercontent.com/Nabief/truenas-desktop/main').rstrip('/')
 
@@ -3764,6 +3764,54 @@ def _web_create(site):
     return sid, clean
 
 
+def _web_reimport():
+    """Recrée les entrées de sites à partir des dossiers du dataset Web non encore
+    enregistrés. Type 'php' si un fichier .php est présent, sinon 'static'. Port
+    auto-assigné. Retourne la liste des noms importés."""
+    base = _web_dataset_path()
+    data = _web_read()
+    existing = set()
+    for s in data.values():
+        if isinstance(s, dict) and s.get('root'):
+            existing.add(os.path.realpath(str(s['root'])))
+    try:
+        entries = sorted(os.listdir(base))
+    except OSError as e:
+        raise RuntimeError('Dataset Web introuvable (%s) : %s' % (base, e))
+    imported = []
+    for name in entries:
+        full = os.path.join(base, name)
+        if name.startswith('.') or not os.path.isdir(full):
+            continue
+        real = os.path.realpath(full)
+        if real in existing:
+            continue
+        is_php = os.path.exists(os.path.join(full, 'index.php'))
+        if not is_php:
+            try:
+                is_php = any(f.endswith('.php') for f in os.listdir(full))
+            except OSError:
+                is_php = False
+        site = {'name': name[:48], 'type': ('php' if is_php else 'static'),
+                'root': real, 'server_name': ''}
+        if is_php:
+            site['php_version'] = WEB_PHP_DEFAULT
+        try:
+            clean = _web_validate(site, data)
+            sid = _sh_secrets.token_hex(4)
+            clean['enabled'] = True
+            clean['created_at'] = int(_sh_time.time())
+            clean['imported'] = True
+            data[sid] = clean
+            imported.append(clean['name'])
+        except Exception as e:
+            log.warning('web reimport skip %s: %s', name, e)
+    if imported:
+        _web_write(data)
+        _web_regenerate()
+    return imported
+
+
 # ── Profils PHP : réglages php.ini + extensions, par version ────────────────
 def _php_profiles_read():
     with _web_lock:
@@ -6533,6 +6581,16 @@ class FileOpsHandler(BaseHTTPRequestHandler):
                 b = self._body()
                 sid, clean = _web_create(b)
                 self._json(200, {'ok': True, 'id': sid, 'site': _web_public(clean, sid)})
+            except (ValueError, PermissionError) as e:
+                self._json(400, {'error': str(e)})
+            except Exception as e:
+                self._json(500, {'error': str(e)})
+            return
+
+        if path == '/websites/reimport':
+            try:
+                imported = _web_reimport()
+                self._json(200, {'ok': True, 'imported': imported, 'count': len(imported)})
             except (ValueError, PermissionError) as e:
                 self._json(400, {'error': str(e)})
             except Exception as e:
