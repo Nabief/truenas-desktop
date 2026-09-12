@@ -270,13 +270,15 @@ GITHUB_RAW={(config.get('github_raw') or GITHUB_RAW_DEFAULT).rstrip('/')}
 
         # ── 5. Génération docker-compose.yml ──────────────────
         emit('▸ Génération de docker-compose.yml...', 'step')
+        # NB : '$$' dans ces commandes → docker compose écrit un '$' littéral dans le
+        # YAML généré (sinon il substitue $v/$e/$last comme variables → watcher cassé).
         php_reload = (
             "apk add --no-cache curl >/dev/null 2>&1 || true; "
             "[ -x /usr/local/bin/install-php-extensions ] || { curl -sSLf https://github.com/mlocati/docker-php-extension-installer/releases/latest/download/install-php-extensions -o /usr/local/bin/install-php-extensions && chmod +x /usr/local/bin/install-php-extensions; }; "
-            "[ -s /conf/extensions.txt ] && install-php-extensions $(cat /conf/extensions.txt) || true; "
-            "( last=''; lastext=''; while true; do e=$(cat /conf/.extreload 2>/dev/null); if [ \"$e\" != \"$lastext\" ]; then lastext=\"$e\"; { [ -s /conf/extensions.txt ] && install-php-extensions $(cat /conf/extensions.txt) >/dev/null 2>&1; } || true; kill -USR2 1 2>/dev/null || true; fi; v=$(cat /conf/.reload 2>/dev/null); if [ \"$v\" != \"$last\" ]; then last=\"$v\"; kill -USR2 1 2>/dev/null || true; fi; sleep 3; done ) & exec php-fpm"
+            "[ -s /conf/extensions.txt ] && install-php-extensions $$(cat /conf/extensions.txt) || true; "
+            "( last=''; lastext=''; while true; do e=$$(cat /conf/.extreload 2>/dev/null); if [ \"$$e\" != \"$$lastext\" ]; then lastext=\"$$e\"; { [ -s /conf/extensions.txt ] && install-php-extensions $$(cat /conf/extensions.txt) >/dev/null 2>&1; } || true; kill -USR2 1 2>/dev/null || true; fi; v=$$(cat /conf/.reload 2>/dev/null); if [ \"$$v\" != \"$$last\" ]; then last=\"$$v\"; kill -USR2 1 2>/dev/null || true; fi; sleep 3; done ) & exec php-fpm"
         )
-        web_reload = "last=''; ( while true; do v=$(cat /etc/nginx/conf.d/.reload 2>/dev/null); if [ \"$v\" != \"$last\" ]; then last=\"$v\"; nginx -t && nginx -s reload; fi; sleep 3; done ) & exec nginx -g 'daemon off;'"
+        web_reload = "last=''; ( while true; do v=$$(cat /etc/nginx/conf.d/.reload 2>/dev/null); if [ \"$$v\" != \"$$last\" ]; then last=\"$$v\"; nginx -t && nginx -s reload; fi; sleep 3; done ) & exec nginx -g 'daemon off;'"
 
         def php_service(ver):
             return f"""  php{ver.replace('.','')}:

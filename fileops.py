@@ -39,7 +39,7 @@ VM_DIR     = os.environ.get('VM_DIR',  '/mnt/Truenas_Stockage/vms')
 ISO_DIR    = os.environ.get('ISO_DIR', '/mnt/Truenas_Stockage')
 
 # ── Version & mise à jour ─────────────────────────────────────────────────────
-APP_VERSION = '1.2.0'
+APP_VERSION = '1.2.1'
 APP_DIR     = os.environ.get('APP_DIR', '')  # dossier d'install (contient fileops.py, HTML…)
 GITHUB_RAW  = os.environ.get('GITHUB_RAW', 'https://raw.githubusercontent.com/Nabief/truenas-desktop/main').rstrip('/')
 
@@ -3736,6 +3736,13 @@ def _web_regenerate():
             f.write(str(_sh_time.time()))
     except OSError as e:
         log.warning('web reload signal error: %s', e)
+    # Rechargement direct et fiable via le host (indépendant du watcher interne du
+    # conteneur, qui peut être cassé selon l'échappement de la compose).
+    try:
+        ssh_exec("sudo -n docker exec truenas-websites sh -c "
+                 + shq("nginx -t && nginx -s reload"), timeout=30)
+    except Exception as e:
+        log.warning('web nginx reload (ssh) error: %s', e)
 
 
 def _web_public(site, sid):
