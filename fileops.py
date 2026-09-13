@@ -39,7 +39,7 @@ VM_DIR     = os.environ.get('VM_DIR',  '/mnt/Truenas_Stockage/vms')
 ISO_DIR    = os.environ.get('ISO_DIR', '/mnt/Truenas_Stockage')
 
 # ── Version & mise à jour ─────────────────────────────────────────────────────
-APP_VERSION = '1.3.1'
+APP_VERSION = '1.3.2'
 APP_DIR     = os.environ.get('APP_DIR', '')  # dossier d'install (contient fileops.py, HTML…)
 GITHUB_RAW  = os.environ.get('GITHUB_RAW', 'https://raw.githubusercontent.com/Nabief/truenas-desktop/main').rstrip('/')
 
@@ -5356,29 +5356,64 @@ def _dl_single(it, fl, total):
 
 
 def _dl_multi(it, fl, total, n):
-    """Téléchargement segmenté : n connexions parallèles (requêtes Range)."""
-    import urllib.request
+    """Téléchargement segmenté : n connexions parallèles (requêtes Range) écrites
+    DIRECTEMENT dans le fichier final à leur offset. Plus aucune passe de
+    réassemblage en fin de téléchargement (gain majeur sur les gros fichiers)."""
+    import urllib.request, glob
     path = it['path']
+    meta = path + '.parts'          # progression par segment (pour la reprise)
     seg = (total + n - 1) // n
-    seg_bytes = [0] * n
     errs = [None] * n
 
+    # Bornes [start, end) de chaque segment.
+    bounds = [(i * seg, min((i + 1) * seg, total)) for i in range(n)]
+
+    # Reprise : réutilise le fichier existant + la progression sauvegardée.
+    seg_bytes = [0] * n
+    resume = False
+    try:
+        if os.path.exists(path) and os.path.getsize(path) == total and os.path.exists(meta):
+            with open(meta, 'r') as mf:
+                saved = json.load(mf)
+            if isinstance(saved, list) and len(saved) == n:
+                seg_bytes = [max(0, int(x)) for x in saved]
+                resume = True
+    except Exception:
+        resume = False
+
+    if not resume:
+        # Pré-alloue le fichier final (fichier creux : instantané) pour pouvoir
+        # écrire chaque segment à sa position définitive.
+        with open(path, 'wb') as f:
+            if total:
+                f.truncate(total)
+        seg_bytes = [0] * n
+        # Nettoie d'éventuels anciens fragments .partN (ancien format).
+        for old in glob.glob(path + '.part[0-9]*'):
+            try:
+                os.remove(old)
+            except OSError:
+                pass
+
+    def _persist_meta():
+        try:
+            with open(meta, 'w') as mf:
+                json.dump(seg_bytes, mf)
+        except Exception:
+            pass
+
     def _seg(i):
-        start = i * seg
-        end = min((i + 1) * seg, total)
-        if start >= end:
-            return
-        partf = path + '.part%d' % i
-        have = os.path.getsize(partf) if os.path.exists(partf) else 0
-        seg_bytes[i] = have
-        if start + have >= end:
+        start, end = bounds[i]
+        done = seg_bytes[i]
+        if start >= end or start + done >= end:
             return
         try:
             req = urllib.request.Request(it['url'], headers={
                 'User-Agent': 'TrueNAS-Desktop',
-                'Range': 'bytes=%d-%d' % (start + have, end - 1)})
+                'Range': 'bytes=%d-%d' % (start + done, end - 1)})
             resp = urllib.request.urlopen(req, timeout=60)
-            with open(partf, 'ab' if have > 0 else 'wb') as f:
+            with open(path, 'r+b') as f:
+                f.seek(start + done)
                 while True:
                     if fl.get('cancel') or fl.get('pause'):
                         return
@@ -5411,6 +5446,7 @@ def _dl_multi(it, fl, total, n):
                 it['eta'] = int((total - downloaded) / spd) if (spd > 0 and total) else 0
             last_t = now
             last_b = downloaded
+            _persist_meta()
     for t in threads:
         t.join()
     downloaded = sum(seg_bytes)
@@ -5418,9 +5454,9 @@ def _dl_multi(it, fl, total, n):
         it['downloaded'] = downloaded
         it['speed'] = 0
     if fl.get('cancel'):
-        for i in range(n):
+        for pth in (path, meta):
             try:
-                os.remove(path + '.part%d' % i)
+                os.remove(pth)
             except OSError:
                 pass
         with _dl_lock:
@@ -5428,24 +5464,21 @@ def _dl_multi(it, fl, total, n):
         _dl_save()
         return
     if fl.get('pause'):
+        _persist_meta()
         with _dl_lock:
             it['status'] = 'paused'
         _dl_save()
         return
     if downloaded < total or any(errs):
+        _persist_meta()
         msg = '; '.join([e for e in errs if e][:2]) or 'segments incomplets'
         raise RuntimeError('Téléchargement incomplet : ' + msg)
-    with open(path, 'wb') as out:
-        for i in range(n):
-            partf = path + '.part%d' % i
-            if os.path.exists(partf):
-                with open(partf, 'rb') as pf:
-                    _sh_shutil.copyfileobj(pf, out)
-    for i in range(n):
-        try:
-            os.remove(path + '.part%d' % i)
-        except OSError:
-            pass
+    # Terminé : le fichier final est déjà complet et à sa place — aucune
+    # recopie/réassemblage. On retire simplement la métadonnée de progression.
+    try:
+        os.remove(meta)
+    except OSError:
+        pass
     with _dl_lock:
         it['status'] = 'done'
         it['eta'] = 0
@@ -5772,10 +5805,19 @@ def _dl_cancel(did, delete=True):
             it['status'] = 'canceled'
             it['speed'] = 0
         if delete:
-            try:
-                os.remove(it['path'] + '.part')
-            except OSError:
-                pass
+            # multi-part non terminé : fichier final partiel + métadonnée .parts.
+            incomplete_multi = (it.get('status') != 'done'
+                                and os.path.exists(it['path'] + '.parts'))
+            for suffix in ('.part', '.parts'):
+                try:
+                    os.remove(it['path'] + suffix)
+                except OSError:
+                    pass
+            if incomplete_multi:
+                try:
+                    os.remove(it['path'])
+                except OSError:
+                    pass
         _dl_save()
     return {'ok': True}
 
