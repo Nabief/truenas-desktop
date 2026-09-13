@@ -39,7 +39,7 @@ VM_DIR     = os.environ.get('VM_DIR',  '/mnt/Truenas_Stockage/vms')
 ISO_DIR    = os.environ.get('ISO_DIR', '/mnt/Truenas_Stockage')
 
 # ── Version & mise à jour ─────────────────────────────────────────────────────
-APP_VERSION = '1.2.3'
+APP_VERSION = '1.3.0'
 APP_DIR     = os.environ.get('APP_DIR', '')  # dossier d'install (contient fileops.py, HTML…)
 GITHUB_RAW  = os.environ.get('GITHUB_RAW', 'https://raw.githubusercontent.com/Nabief/truenas-desktop/main').rstrip('/')
 
@@ -2907,21 +2907,6 @@ def _lv2_snapshot_vm_must_be_stopped(name):
     return state
 
 
-def _lv2_snapshot_safe_name(label=''):
-    import re
-    import time
-
-    label = str(label or '').strip().lower()
-    label = re.sub(r'[^a-z0-9_.-]+', '-', label)
-    label = label.strip('-._')
-
-    if label:
-        label = label[:32]
-        return time.strftime('snap-%Y%m%d-%H%M%S-') + label
-
-    return time.strftime('snap-%Y%m%d-%H%M%S')
-
-
 def _lv2_snapshot_name_norm(name):
     import re
 
@@ -2933,166 +2918,6 @@ def _lv2_snapshot_name_norm(name):
         raise RuntimeError('Nom snapshot invalide')
 
     return name
-
-
-def _lv2_snapshot_current(name):
-    out, err, code = ssh_exec(
-        "sudo -n virsh -c " + shq(VIRSH_URI) + " snapshot-current --name " + shq(name),
-        timeout=20
-    )
-    if code == 0:
-        return out.strip()
-    return ''
-
-
-def _lv2_snapshot_list(name):
-    # Version robuste/rapide : évite snapshot-dumpxml par snapshot.
-    # Objectif : ne jamais bloquer l'API/UI.
-    out, err, code = ssh_exec(
-        "timeout 15s sudo -n virsh -c " + shq(VIRSH_URI)
-        + " snapshot-list " + shq(name) + " --name",
-        timeout=20
-    )
-
-    if code != 0:
-        raise RuntimeError((err or out or ('exit ' + str(code))).strip())
-
-    names = [x.strip() for x in out.splitlines() if x.strip()]
-
-    current = ''
-    cout, cerr, ccode = ssh_exec(
-        "timeout 10s sudo -n virsh -c " + shq(VIRSH_URI)
-        + " snapshot-current --name " + shq(name),
-        timeout=15
-    )
-    if ccode == 0:
-        current = cout.strip()
-
-    items = []
-    for snap in names:
-        items.append({
-            'name': snap,
-            'current': snap == current,
-            'state': '',
-            'creation_time': None,
-            'creation_time_iso': '',
-            'description': '',
-            'parent': '',
-        })
-
-    return {
-        'api': 'libvirt2',
-        'readonly': False,
-        'name': name,
-        'current': current,
-        'snapshots': items,
-    }
-
-
-
-def _lv2_snapshot_create(name, label='', description=''):
-    _lv2_snapshot_vm_must_be_stopped(name)
-
-    snap = _lv2_snapshot_safe_name(label)
-    description = str(description or '').strip()
-    if not description:
-        description = 'Snapshot créé depuis TrueNAS Desktop libvirt2'
-
-    out, err, code = ssh_exec(
-        "sudo -n virsh -c " + shq(VIRSH_URI)
-        + " snapshot-create-as "
-        + shq(name)
-        + " " + shq(snap)
-        + " --description " + shq(description)
-        + " --atomic",
-        timeout=300
-    )
-
-    if code != 0:
-        raise RuntimeError((err or out or ('exit ' + str(code))).strip())
-
-    return {
-        'api': 'libvirt2',
-        'ok': True,
-        'name': name,
-        'action': 'snapshot_create',
-        'snapshot': snap,
-        'snapshots': _lv2_snapshot_list(name).get('snapshots', []),
-    }
-
-
-def _lv2_snapshot_revert(name, snapshot):
-    _lv2_snapshot_vm_must_be_stopped(name)
-
-    snapshot = _lv2_snapshot_name_norm(snapshot)
-
-    snap_data = _lv2_snapshot_list(name)
-    current = str(snap_data.get('current') or '').strip()
-
-    if current == snapshot:
-        return {
-            'api': 'libvirt2',
-            'ok': True,
-            'name': name,
-            'action': 'snapshot_revert',
-            'snapshot': snapshot,
-            'already_current': True,
-            'warning': 'Snapshot déjà courant : aucune restauration nécessaire.',
-            'snapshots': snap_data.get('snapshots', []),
-        }
-
-    out, err, code = ssh_exec(
-        "timeout 60s sudo -n virsh -c " + shq(VIRSH_URI)
-        + " snapshot-revert "
-        + shq(name)
-        + " " + shq(snapshot),
-        timeout=75
-    )
-
-    if code != 0:
-        msg = (err or out or '').strip()
-        if not msg:
-            msg = 'snapshot-revert a échoué sans message, code=' + str(code)
-        if code == 124:
-            msg = 'Timeout snapshot-revert : libvirt n’a pas répondu dans les délais.'
-        raise RuntimeError(msg)
-
-    return {
-        'api': 'libvirt2',
-        'ok': True,
-        'name': name,
-        'action': 'snapshot_revert',
-        'snapshot': snapshot,
-        'already_current': False,
-        'snapshots': _lv2_snapshot_list(name).get('snapshots', []),
-    }
-
-
-
-def _lv2_snapshot_delete(name, snapshot):
-    _lv2_snapshot_vm_must_be_stopped(name)
-
-    snapshot = _lv2_snapshot_name_norm(snapshot)
-
-    out, err, code = ssh_exec(
-        "sudo -n virsh -c " + shq(VIRSH_URI)
-        + " snapshot-delete "
-        + shq(name)
-        + " " + shq(snapshot),
-        timeout=300
-    )
-
-    if code != 0:
-        raise RuntimeError((err or out or ('exit ' + str(code))).strip())
-
-    return {
-        'api': 'libvirt2',
-        'ok': True,
-        'name': name,
-        'action': 'snapshot_delete',
-        'snapshot': snapshot,
-        'snapshots': _lv2_snapshot_list(name).get('snapshots', []),
-    }
 
 
 # ── MDM-SHARE-LINKS-V1-BEGIN ────────────────────────────────────────────────
@@ -4906,10 +4731,15 @@ PREMIUM_FILE = os.path.join(ACCESS_DATA_DIR, 'premium.json')
 _prem_lock = _threading.RLock()
 _PREM_PROVIDERS = ('alldebrid', 'realdebrid', 'debridlink', 'premiumize', 'megadebrid',
                    'onefichier', 'rapidgator', 'nitroflare', 'ddownload')
+# Débrideurs « généralistes » : résolvent des liens de n'importe quel hébergeur
+# supporté (utilisés par le filet de sécurité auto ci-dessous).
+_PREM_DEBRIDERS = ('alldebrid', 'realdebrid', 'debridlink', 'premiumize', 'megadebrid')
 _PREM_HOSTERS = ('1fichier.com', 'rapidgator.net', 'uptobox.com', 'uptostream.com', 'turbobit.net',
                  'nitroflare.com', 'uploaded.net', 'ul.to', 'mediafire.com', 'katfile.com',
                  'fikper.com', 'ddownload.com', 'filefactory.com', 'wupfile.com', 'hexload.com',
-                 'rapidgator.asia', 'mega.nz', 'usersdrive.com', 'file.al')
+                 'rapidgator.asia', 'mega.nz', 'usersdrive.com', 'file.al',
+                 'turbobit.cc', 'trbt.cc', 'turb.cc', 'turb.pw', 'uploady.io',
+                 'dailyuploads.io')
 
 
 def _prem_read():
@@ -5290,7 +5120,104 @@ _dl_lock = _threading.RLock()
 _dl_items = {}
 _dl_threads = {}
 _dl_flags = {}
-_dl_sema = _threading.Semaphore(_DL_MAX_CONCURRENT)
+class _ResizableSemaphore:
+    """Sémaphore dont la capacité (nombre de jetons) est ajustable à chaud.
+    Réduire la limite pendant des téléchargements en cours prend effet dès
+    qu'un jeton se libère ; augmenter réveille aussitôt les threads en attente."""
+
+    def __init__(self, value):
+        self._cond = _threading.Condition(_threading.Lock())
+        self._limit = int(value)
+        self._in_use = 0
+
+    def acquire(self, blocking=True, timeout=None):
+        with self._cond:
+            while self._in_use >= self._limit:
+                if not blocking:
+                    return False
+                if not self._cond.wait(timeout):
+                    return False
+            self._in_use += 1
+            return True
+
+    def release(self):
+        with self._cond:
+            if self._in_use > 0:
+                self._in_use -= 1
+            self._cond.notify_all()
+
+    def set_limit(self, n):
+        with self._cond:
+            self._limit = int(n)
+            self._cond.notify_all()
+
+    def __enter__(self):
+        self.acquire()
+        return self
+
+    def __exit__(self, *exc):
+        self.release()
+        return False
+
+
+_dl_sema = _ResizableSemaphore(_DL_MAX_CONCURRENT)
+
+# MDM-DL-SETTINGS-V1 : réglages persistants du gestionnaire de téléchargements.
+# Le nombre de téléchargements simultanés est ajustable à chaud depuis l'UI
+# (endpoint POST /downloads/settings) et persiste dans data/dl-settings.json.
+DL_SETTINGS_FILE = os.path.join(ACCESS_DATA_DIR, 'dl-settings.json')
+_DL_MAX_CONCURRENT_MIN = 1
+_DL_MAX_CONCURRENT_MAX = 20
+
+
+def _dl_settings_get():
+    return {'max_concurrent': _DL_MAX_CONCURRENT,
+            'default_connections': _DL_CONNECTIONS}
+
+
+def _dl_settings_save():
+    try:
+        _access_write_json(DL_SETTINGS_FILE, _dl_settings_get())
+    except Exception as e:
+        log.warning('dl settings save: %s', e)
+
+
+def _dl_set_max_concurrent(n):
+    """Ajuste le nombre de téléchargements simultanés à chaud.
+    Augmenter libère aussitôt des jetons du sémaphore ; diminuer prend effet
+    au fur et à mesure que les téléchargements en cours se terminent."""
+    global _DL_MAX_CONCURRENT
+    try:
+        n = int(n)
+    except (TypeError, ValueError):
+        raise ValueError('Nombre de téléchargements simultanés invalide.')
+    n = max(_DL_MAX_CONCURRENT_MIN, min(_DL_MAX_CONCURRENT_MAX, n))
+    with _dl_lock:
+        _DL_MAX_CONCURRENT = n
+    _dl_sema.set_limit(n)
+    return n
+
+
+def _dl_set_default_connections(n):
+    global _DL_CONNECTIONS
+    try:
+        n = int(n)
+    except (TypeError, ValueError):
+        raise ValueError('Nombre de connexions par lien invalide.')
+    _DL_CONNECTIONS = max(1, min(16, n))
+    return _DL_CONNECTIONS
+
+
+def _dl_settings_load():
+    try:
+        d = _access_read_json(DL_SETTINGS_FILE, {})
+        if isinstance(d, dict):
+            if d.get('max_concurrent') is not None:
+                _dl_set_max_concurrent(d.get('max_concurrent'))
+            if d.get('default_connections') is not None:
+                _dl_set_default_connections(d.get('default_connections'))
+    except Exception as e:
+        log.warning('dl settings load: %s', e)
 
 
 def _dl_sanitize_name(name):
@@ -5347,14 +5274,15 @@ def _dl_probe(url):
         ar = (r.headers.get('Accept-Ranges') or '').lower()
         clen = r.headers.get('Content-Length')
         cd = r.headers.get('Content-Disposition') or ''
+        ct = (r.headers.get('Content-Type') or '').split(';')[0].strip().lower()
     fn = None
     m = re.search(r'filename\*?=(?:UTF-8\'\')?"?([^";]+)"?', cd)
     if m:
         fn = _dl_sanitize_name(unquote(m.group(1)))
     if status == 206 and cr:
         mm = re.search(r'/(\d+)\s*$', cr)
-        return (int(mm.group(1)) if mm else 0), True, fn
-    return (int(clen) if clen else 0), (ar == 'bytes'), fn
+        return (int(mm.group(1)) if mm else 0), True, fn, ct
+    return (int(clen) if clen else 0), (ar == 'bytes'), fn, ct
 
 
 def _dl_maybe_rename(it, fn):
@@ -5677,7 +5605,28 @@ def _dl_worker(did):
                 it['status'] = 'downloading'
                 it['error'] = ''
             _dl_save()
-            total, ranges, fn = _dl_probe(it['url'])
+            total, ranges, fn, ctype = _dl_probe(it['url'])
+            # Filet de sécurité : un hébergeur non reconnu répond souvent par une
+            # page HTML au lieu du fichier. Si le lien n'a pas déjà été résolu et
+            # qu'un débrideur généraliste est configuré (premium != off), on le
+            # fait passer par le débrideur plutôt que d'enregistrer la page HTML.
+            if (not it.get('via')
+                    and str(it.get('premium') or 'auto') != 'off'
+                    and 'html' in (ctype or '')
+                    and any(_prem_configured(pr) for pr in _PREM_DEBRIDERS)):
+                r = _resolve_premium(it.get('source_url') or it['url'])
+                newname = _dl_sanitize_name(r['filename']) if r.get('filename') else None
+                with _dl_lock:
+                    it['url'] = r['link']
+                    it['via'] = r.get('via')
+                    if r.get('size'):
+                        it['total'] = r['size']
+                    if newname:
+                        newpath = _dl_pick_path(it['dir'], newname)
+                        it['filename'] = os.path.basename(newpath)
+                        it['path'] = newpath
+                _dl_save()
+                total, ranges, fn, ctype = _dl_probe(it['url'])
             _dl_maybe_rename(it, fn)
             n = int(it.get('connections') or _DL_CONNECTIONS)
             if ranges and total and total > _DL_MIN_SEG and n > 1:
@@ -5757,7 +5706,7 @@ def _dl_add(url, dest_dir=None, filename=None, premium='auto', connections=None,
     it = {'id': did, 'url': url, 'source_url': source_url, 'via': via, 'dir': dest_dir,
           'filename': os.path.basename(path), 'path': path,
           'total': resolved_size or 0, 'downloaded': 0, 'speed': 0, 'eta': 0,
-          'connections': conn,
+          'connections': conn, 'premium': premium,
           'auto_extract': bool(auto_extract), 'auto_remove': bool(auto_remove),
           'status': 'queued', 'error': '', 'added_at': int(_sh_time.time())}
     with _dl_lock:
@@ -5859,6 +5808,7 @@ def _dl_list():
 
 
 _dl_load()
+_dl_settings_load()
 # ── MDM-DOWNLOADS-V1-END ─────────────────────────────────────────────────────
 
 
@@ -6770,6 +6720,20 @@ class FileOpsHandler(BaseHTTPRequestHandler):
         if path == '/downloads/clear':
             try:
                 self._json(200, _dl_clear())
+            except Exception as e:
+                self._json(500, {'error': str(e)})
+            return
+        if path == '/downloads/settings':
+            try:
+                b = self._body()
+                if b.get('max_concurrent') is not None:
+                    _dl_set_max_concurrent(b.get('max_concurrent'))
+                if b.get('default_connections') is not None:
+                    _dl_set_default_connections(b.get('default_connections'))
+                _dl_settings_save()
+                self._json(200, dict({'ok': True}, **_dl_settings_get()))
+            except (ValueError, PermissionError) as e:
+                self._json(400, {'error': str(e)})
             except Exception as e:
                 self._json(500, {'error': str(e)})
             return
@@ -7808,181 +7772,6 @@ if __name__ == '__main__':
     t = _th.Thread(target=ws_server_start, args=(WS_PORT,), daemon=True)
     t.start()
 
-    
-
-# MDM-LIBVIRT2-SNAPSHOTS-SAFE-OVERRIDES-20260710
-# Overrides non destructifs : définis juste avant le démarrage serveur.
-# Objectif : stabiliser snapshots sans toucher à FileOpsHandler.
-
-def _lv2_snapshot_current(name):
-    out, err, code = ssh_exec(
-        "timeout 10s sudo -n virsh -c " + shq(VIRSH_URI)
-        + " snapshot-current --name " + shq(name),
-        timeout=15
-    )
-    if code == 0:
-        return out.strip()
-    return ""
-
-
-def _lv2_snapshot_list(name):
-    out, err, code = ssh_exec(
-        "timeout 15s sudo -n virsh -c " + shq(VIRSH_URI)
-        + " snapshot-list " + shq(name) + " --name",
-        timeout=20
-    )
-
-    if code != 0:
-        msg = (err or out or "").strip()
-        if not msg:
-            msg = "snapshot-list a échoué sans message, code=" + str(code)
-        if code == 124:
-            msg = "Timeout snapshot-list : libvirt n’a pas répondu dans les délais."
-        raise RuntimeError(msg)
-
-    names = [x.strip() for x in out.splitlines() if x.strip()]
-    current = _lv2_snapshot_current(name)
-
-    items = []
-    for snap in names:
-        items.append({
-            "name": snap,
-            "current": snap == current,
-            "state": "",
-            "creation_time": None,
-            "creation_time_iso": "",
-            "description": "",
-            "parent": "",
-        })
-
-    return {
-        "api": "libvirt2",
-        "readonly": False,
-        "name": name,
-        "current": current,
-        "snapshots": items,
-    }
-
-
-def _lv2_snapshot_revert(name, snapshot):
-    _lv2_snapshot_vm_must_be_stopped(name)
-
-    snapshot = _lv2_snapshot_name_norm(snapshot)
-
-    snap_data = _lv2_snapshot_list(name)
-    current = str(snap_data.get("current") or "").strip()
-
-    if current == snapshot:
-        return {
-            "api": "libvirt2",
-            "ok": True,
-            "name": name,
-            "action": "snapshot_revert",
-            "snapshot": snapshot,
-            "already_current": True,
-            "warning": "Snapshot déjà courant : aucune restauration nécessaire.",
-            "snapshots": snap_data.get("snapshots", []),
-        }
-
-    out, err, code = ssh_exec(
-        "timeout 60s sudo -n virsh -c " + shq(VIRSH_URI)
-        + " snapshot-revert " + shq(name) + " " + shq(snapshot),
-        timeout=75
-    )
-
-    if code != 0:
-        msg = (err or out or "").strip()
-        if not msg:
-            msg = "snapshot-revert a échoué sans message, code=" + str(code)
-        if code == 124:
-            msg = "Timeout snapshot-revert : libvirt n’a pas répondu dans les délais."
-        raise RuntimeError(msg)
-
-    return {
-        "api": "libvirt2",
-        "ok": True,
-        "name": name,
-        "action": "snapshot_revert",
-        "snapshot": snapshot,
-        "already_current": False,
-        "snapshots": _lv2_snapshot_list(name).get("snapshots", []),
-    }
-
-
-def _lv2_snapshot_delete(name, snapshot):
-    _lv2_snapshot_vm_must_be_stopped(name)
-
-    snapshot = _lv2_snapshot_name_norm(snapshot)
-
-    out, err, code = ssh_exec(
-        "timeout 60s sudo -n virsh -c " + shq(VIRSH_URI)
-        + " snapshot-delete " + shq(name) + " " + shq(snapshot),
-        timeout=75
-    )
-
-    if code != 0:
-        msg = (err or out or "").strip()
-        if not msg:
-            msg = "snapshot-delete a échoué sans message, code=" + str(code)
-        if code == 124:
-            msg = "Timeout snapshot-delete : libvirt n’a pas répondu dans les délais."
-        raise RuntimeError(msg)
-
-    return {
-        "api": "libvirt2",
-        "ok": True,
-        "name": name,
-        "action": "snapshot_delete",
-        "snapshot": snapshot,
-        "snapshots": _lv2_snapshot_list(name).get("snapshots", []),
-    }
-
-
-
-
-# MDM-LIBVIRT2-INTERNAL-SNAPSHOTS-DISABLED-20260710
-# Désactivation volontaire des snapshots internes libvirt/qcow2.
-# Motif : snapshot-delete peut lancer qemu-img snapshot -d pendant plusieurs minutes
-# et bloquer libvirt/nginx/fileops. Remplacé ensuite par snapshots sûrs par copie.
-
-def _lv2_snapshot_list(name):
-    return {
-        "api": "libvirt2",
-        "readonly": False,
-        "name": name,
-        "disabled": True,
-        "engine": "internal-libvirt-disabled",
-        "current": "",
-        "snapshots": [],
-        "warning": (
-            "Snapshots internes libvirt/qcow2 désactivés : "
-            "trop bloquants pour l’interface web. Utiliser les futurs snapshots sûrs par copie."
-        ),
-    }
-
-
-def _lv2_snapshot_create(name, label="", description=""):
-    raise RuntimeError(
-        "Snapshots internes libvirt/qcow2 désactivés. "
-        "Ils seront remplacés par des snapshots sûrs TrueNAS Desktop par copie qcow2/XML."
-    )
-
-
-def _lv2_snapshot_revert(name, snapshot):
-    raise RuntimeError(
-        "Restauration snapshot interne libvirt désactivée. "
-        "Utiliser les futurs snapshots sûrs TrueNAS Desktop."
-    )
-
-
-def _lv2_snapshot_delete(name, snapshot):
-    raise RuntimeError(
-        "Suppression snapshot interne libvirt désactivée. "
-        "Cette action peut bloquer qemu-img/libvirt pendant plusieurs minutes."
-    )
-
-
-
 
 # MDM-LIBVIRT2-SAFE-COPY-SNAPSHOTS-20260710
 # Snapshots sûrs TrueNAS Desktop.
@@ -8169,161 +7958,6 @@ def _lv2_snapshot_list(name):
         "root": vm_dir,
         "warning": "Snapshots sûrs par copie qcow2/XML/NVRAM. VM arrêtée obligatoire.",
     }
-
-
-def _lv2_snapshot_create(name, label="", description=""):
-    _lv2_snapshot_vm_must_be_stopped(name)
-
-    label = str(label or "").strip()
-    description = str(description or "").strip()
-    snap_id = _lv2_safe_snapshot_id(label)
-    vm_dir = _lv2_safe_vm_dir(name)
-    snap_dir = vm_dir.rstrip("/") + "/" + snap_id
-
-    xml, disks, nvram = _lv2_safe_vm_files_from_xml(name)
-
-    if not disks:
-        raise RuntimeError("Aucun disque fichier détecté pour cette VM")
-
-    created_at = _lv2_safe_time.strftime("%Y-%m-%dT%H:%M:%S%z")
-
-    meta = {
-        "id": snap_id,
-        "name": snap_id,
-        "label": label,
-        "description": description,
-        "vm": name,
-        "engine": "safe-copy",
-        "status": "creating",
-        "created_at": created_at,
-        "finished_at": "",
-        "path": snap_dir,
-        "domain_xml": "domain.xml",
-        "disks": disks,
-        "nvram": nvram,
-        "error": "",
-    }
-
-    meta_json = _lv2_safe_json.dumps(meta, ensure_ascii=False, indent=2)
-
-    copy_lines = []
-    copy_lines.append("set -e")
-    copy_lines.append("mkdir -p " + shq(snap_dir + "/disks") + " " + shq(snap_dir + "/nvram") + " " + shq(snap_dir + "/logs"))
-    copy_lines.append("cat > " + shq(snap_dir + "/metadata.json") + " <<'EOF_META'\n" + meta_json + "\nEOF_META")
-    copy_lines.append("sudo -n virsh -c " + shq(VIRSH_URI) + " dumpxml " + shq(name) + " > " + shq(snap_dir + "/domain.xml"))
-
-    for d in disks:
-        copy_lines.append("test -f " + shq(d["source"]))
-        copy_lines.append("cp --reflink=auto --sparse=always " + shq(d["source"]) + " " + shq(snap_dir + "/" + d["dest"]))
-
-    if nvram:
-        copy_lines.append("if [ -f " + shq(nvram["source"]) + " ]; then cp --reflink=auto --sparse=always " + shq(nvram["source"]) + " " + shq(snap_dir + "/" + nvram["dest"]) + "; fi")
-
-    copy_lines.append(
-        "python3 - <<'EOF_DONE'\n"
-        "import json\n"
-        "p=" + repr(snap_dir + "/metadata.json") + "\n"
-        "m=json.load(open(p,'r',encoding='utf-8'))\n"
-        "m['status']='ready'\n"
-        "import time\n"
-        "m['finished_at']=time.strftime('%Y-%m-%dT%H:%M:%S%z')\n"
-        "json.dump(m,open(p,'w',encoding='utf-8'),ensure_ascii=False,indent=2)\n"
-        "EOF_DONE"
-    )
-
-    script = "\n".join(copy_lines)
-
-    wrapped = (
-        "mkdir -p " + shq(snap_dir + "/logs") + "; "
-        "cat > " + shq(snap_dir + "/create.sh") + " <<'EOF_SCRIPT'\n"
-        + script +
-        "\nEOF_SCRIPT\n"
-        "chmod +x " + shq(snap_dir + "/create.sh") + "; "
-        "( " + shq(snap_dir + "/create.sh") + " > " + shq(snap_dir + "/logs/create.log") + " 2>&1 || "
-        "python3 - <<'EOF_ERR'\n"
-        "import json, time\n"
-        "p=" + repr(snap_dir + "/metadata.json") + "\n"
-        "try:\n"
-        "    m=json.load(open(p,'r',encoding='utf-8'))\n"
-        "except Exception:\n"
-        "    m={}\n"
-        "m['status']='error'\n"
-        "m['finished_at']=time.strftime('%Y-%m-%dT%H:%M:%S%z')\n"
-        "try:\n"
-        "    m['error']=open(" + repr(snap_dir + "/logs/create.log") + ",'r',encoding='utf-8',errors='replace').read()[-4000:]\n"
-        "except Exception as e:\n"
-        "    m['error']=str(e)\n"
-        "json.dump(m,open(p,'w',encoding='utf-8'),ensure_ascii=False,indent=2)\n"
-        "EOF_ERR\n"
-        ") & echo $!"
-    )
-
-    out, err, code = ssh_exec(wrapped, timeout=20)
-    if code != 0:
-        raise RuntimeError((err or out or "Impossible de lancer la création du snapshot sûr").strip())
-
-    return {
-        "api": "libvirt2",
-        "ok": True,
-        "name": name,
-        "action": "safe_snapshot_create",
-        "engine": "safe-copy",
-        "snapshot": snap_id,
-        "status": "creating",
-        "pid": out.strip(),
-        "path": snap_dir,
-        "message": "Création du snapshot sûr lancée en tâche de fond.",
-        "snapshots": _lv2_snapshot_list(name).get("snapshots", []),
-    }
-
-
-def _lv2_snapshot_delete(name, snapshot):
-    _lv2_snapshot_vm_must_be_stopped(name)
-
-    snap_id = _lv2_snapshot_name_norm(snapshot)
-    vm_dir = _lv2_safe_vm_dir(name)
-    snap_dir = vm_dir.rstrip("/") + "/" + snap_id
-
-    cmd = (
-        "test -d " + shq(snap_dir) + " || { echo 'Snapshot sûr introuvable'; exit 2; }; "
-        "if [ -f " + shq(snap_dir + "/metadata.json") + " ]; then "
-        "python3 - <<'EOF_MARK'\n"
-        "import json, time\n"
-        "p=" + repr(snap_dir + "/metadata.json") + "\n"
-        "m=json.load(open(p,'r',encoding='utf-8'))\n"
-        "m['status']='deleting'\n"
-        "m['finished_at']=''\n"
-        "json.dump(m,open(p,'w',encoding='utf-8'),ensure_ascii=False,indent=2)\n"
-        "EOF_MARK\n"
-        "fi; "
-        "( rm -rf " + shq(snap_dir) + " ) >/dev/null 2>&1 & echo $!"
-    )
-
-    out, err, code = ssh_exec(cmd, timeout=15)
-    if code != 0:
-        raise RuntimeError((err or out or "Impossible de lancer la suppression du snapshot sûr").strip())
-
-    return {
-        "api": "libvirt2",
-        "ok": True,
-        "name": name,
-        "action": "safe_snapshot_delete",
-        "engine": "safe-copy",
-        "snapshot": snap_id,
-        "status": "deleting",
-        "pid": out.strip(),
-        "message": "Suppression du snapshot sûr lancée en tâche de fond.",
-        "snapshots": _lv2_snapshot_list(name).get("snapshots", []),
-    }
-
-
-def _lv2_snapshot_revert(name, snapshot):
-    raise RuntimeError(
-        "Restauration des snapshots sûrs pas encore activée. "
-        "Création/liste/suppression d’abord, restauration ensuite après validation."
-    )
-
-
 
 
 # MDM-LIBVIRT2-SAFE-COPY-SNAPSHOTS-SUDO-COPY-20260710

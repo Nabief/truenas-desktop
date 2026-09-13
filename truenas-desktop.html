@@ -7000,6 +7000,7 @@ async function dlRender() {
   h += '<div class="tnd-title">Réglages</div>';
   h += formRow('Dossier de destination', '<div style="display:flex;gap:6px;"><input id="dl-dir" class="tnd-input" value="' + _dlDefaultDir.replace(/"/g,'&quot;') + '" style="flex:1;min-width:0;" /><button class="fs-btn" onclick="openFilePicker(\'dl-dir\',null,\'/mnt\')" title="Choisir un dossier">📁</button></div>');
   h += formRow('Connexions par lien', '<select id="dl-conn" class="tnd-input"><option value="1">1 (simple)</option><option value="2">2</option><option value="4">4</option><option value="8">8</option><option value="16">16</option></select>');
+  h += formRow('Téléchargements simultanés', '<select id="dl-maxc" class="tnd-input"><option value="1">1</option><option value="2">2</option><option value="3">3</option><option value="4">4</option><option value="5">5</option><option value="6">6</option><option value="8">8</option><option value="10">10</option></select>');
   h += formRow('Compte premium / débrideur', '<select id="dl-premium" class="tnd-input"><option value="auto">Auto</option><option value="force">Forcer</option><option value="off">Désactivé (direct)</option></select>');
   h += '<label class="tnd-switch" style="display:flex;width:100%;justify-content:space-between;gap:10px;"><span>Décompresser à la fin</span><input type="checkbox" id="dl-extract"></label>';
   h += '<label class="tnd-switch" style="display:flex;width:100%;justify-content:space-between;gap:10px;"><span>Retirer une fois terminé</span><input type="checkbox" id="dl-autoremove"></label>';
@@ -7027,6 +7028,9 @@ async function dlRender() {
   box.innerHTML = h;
   var _dc = document.getElementById('dl-conn');
   if (_dc && r.default_connections) _dc.value = String(r.default_connections);
+  var _mc = document.getElementById('dl-maxc');
+  if (_mc && r.max_concurrent) _mc.value = String(r.max_concurrent);
+  if (_mc) _mc.addEventListener('change', dlMaxConcurrentSave);
   // Restaure les préférences enregistrées (priorité sur les défauts serveur)
   try {
     var _p = JSON.parse(localStorage.getItem('tn-dl-prefs') || '{}');
@@ -7040,6 +7044,18 @@ async function dlRender() {
     var el = document.getElementById(id);
     if (el) el.addEventListener('change', dlPrefSave);
   });
+}
+async function dlMaxConcurrentSave() {
+  var el = document.getElementById('dl-maxc');
+  if (!el) return;
+  var n = Number(el.value) || 3;
+  try {
+    var r = await fileops('POST', 'downloads/settings', { max_concurrent: n });
+    if (r && r.max_concurrent) el.value = String(r.max_concurrent);
+    toast('Téléchargements simultanés : ' + ((r && r.max_concurrent) || n));
+  } catch (e) {
+    toast('Erreur réglage : ' + ((e && e.message) || e));
+  }
 }
 function dlPrefSave() {
   try {
