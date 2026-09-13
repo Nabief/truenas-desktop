@@ -6822,13 +6822,73 @@ async function tndAbout() {
   box.innerHTML = h;
 }
 async function tndDoUpdate() {
-  if (!await showConfirm('Lancer la mise à jour ? Le sidecar va redémarrer (~30 s).')) return;
-  toast('⬆ Mise à jour en cours…');
+  if (!await showConfirm('Lancer la mise à jour ? Le service va redémarrer (~30 s).')) return;
+  var box = document.getElementById('create-app-form');
+  var titleEl = document.getElementById('create-app-title');
+  if (titleEl) titleEl.textContent = 'Mise à jour en cours';
+  // Rendu de l'indicateur de progression (étapes + spinner + message).
+  function _ic(st) {
+    if (st === 'done')  return '<span style="color:var(--success);font-size:16px;line-height:16px;width:18px;text-align:center;">✓</span>';
+    if (st === 'error') return '<span style="color:#f87171;font-size:16px;line-height:16px;width:18px;text-align:center;">✕</span>';
+    if (st === 'active')return '<div class="spinner" style="width:16px;height:16px;"></div>';
+    return '<span style="color:var(--text-dim);font-size:16px;line-height:16px;width:18px;text-align:center;">○</span>';
+  }
+  function render(stepDl, stepRestart, msg, extra) {
+    box.innerHTML = '<div style="display:flex;flex-direction:column;gap:16px;">'
+      + '<div class="tnd-panel tnd-panel-pad" style="display:flex;flex-direction:column;gap:14px;">'
+      + '<div style="font-weight:700;font-size:15px;">TrueNAS Desktop — mise à jour</div>'
+      + '<div class="tnd-row" style="gap:10px;align-items:center;">' + _ic(stepDl) + '<span>Téléchargement des fichiers</span></div>'
+      + '<div class="tnd-row" style="gap:10px;align-items:center;">' + _ic(stepRestart) + '<span>Redémarrage du service</span></div>'
+      + (msg ? '<div class="tnd-muted" style="font-size:12.5px;line-height:1.5;">' + msg + '</div>' : '')
+      + (extra || '')
+      + '</div></div>';
+  }
+
+  render('active', 'pending', 'Téléchargement depuis GitHub…');
+
+  // Version cible (pour détecter la fin effective du redémarrage).
+  var expectedLatest = '';
+  try { var v0 = await fileops('GET', 'version'); expectedLatest = (v0 && v0.latest) || ''; } catch (e) {}
+
   try {
     await fileops('POST', 'update', {});
-    toast('✓ Mise à jour lancée — rechargement dans 30 s');
-    setTimeout(function () { location.reload(true); }, 32000);
-  } catch (e) { toast('❌ ' + e.message); }
+    render('done', 'active', 'Fichiers téléchargés. Redémarrage du bureau et du service…');
+  } catch (e) {
+    // Le redémarrage a pu couper la réponse : c'est normal, on poursuit.
+    render('done', 'active', 'Redémarrage du service… (connexion interrompue, c’est normal)');
+  }
+
+  // Phase de reprise : sonder /version jusqu'au retour du service.
+  var start = Date.now();
+  var TIMEOUT = 120000;
+  var sawDown = false;
+  await new Promise(function (r) { setTimeout(r, 4000); }); // laisser le redémarrage débuter
+
+  (function poll() {
+    var elapsed = Math.round((Date.now() - start) / 1000);
+    if (Date.now() - start > TIMEOUT) {
+      render('done', 'error',
+        'Le service met plus de temps que prévu à revenir. Tu peux recharger la page manuellement.',
+        '<button class="fs-btn" style="width:100%;justify-content:center;margin-top:4px;" onclick="location.reload(true)">Recharger la page</button>');
+      return;
+    }
+    fileops('GET', 'version').then(function (v) {
+      var back = sawDown || !expectedLatest || (v && v.version === expectedLatest);
+      if (!back) {
+        // L'ancienne instance répond encore : redémarrage pas encore effectif.
+        render('done', 'active', 'Redémarrage en cours… (' + elapsed + ' s)');
+        setTimeout(poll, 2000);
+        return;
+      }
+      render('done', 'done',
+        '✓ Mise à jour terminée' + (v && v.version ? ' — version ' + v.version : '') + '. Rechargement…');
+      setTimeout(function () { location.reload(true); }, 1800);
+    }).catch(function () {
+      sawDown = true;
+      render('done', 'active', 'Redémarrage en cours… (' + elapsed + ' s)');
+      setTimeout(poll, 2000);
+    });
+  })();
 }
 var _tndUpdate = null;
 async function tndCheckUpdate() {

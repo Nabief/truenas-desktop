@@ -39,7 +39,7 @@ VM_DIR     = os.environ.get('VM_DIR',  '/mnt/Truenas_Stockage/vms')
 ISO_DIR    = os.environ.get('ISO_DIR', '/mnt/Truenas_Stockage')
 
 # ── Version & mise à jour ─────────────────────────────────────────────────────
-APP_VERSION = '1.3.0'
+APP_VERSION = '1.3.1'
 APP_DIR     = os.environ.get('APP_DIR', '')  # dossier d'install (contient fileops.py, HTML…)
 GITHUB_RAW  = os.environ.get('GITHUB_RAW', 'https://raw.githubusercontent.com/Nabief/truenas-desktop/main').rstrip('/')
 
@@ -435,7 +435,7 @@ def _do_update():
 
 def _schedule_self_restart():
     def _r():
-        _sh_time.sleep(1.5)
+        _sh_time.sleep(3)
         try:
             # Redémarre le bureau (nginx) puis le sidecar. Avec l'écriture sur place
             # ce n'est plus strictement nécessaire pour le HTML, mais garantit la
