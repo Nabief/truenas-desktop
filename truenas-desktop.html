@@ -7052,6 +7052,16 @@ async function dlRender() {
   try { r = await fileops('GET', 'downloads/list'); }
   catch(e) { box.innerHTML = errHtml('Erreur: ' + e.message); return; }
   if (!_dlDefaultDir) _dlDefaultDir = r.default_dir || '/mnt';
+  // Fournisseurs premium configurés -> options du sélecteur de débrideur.
+  var _premSt = {};
+  try { var _pr = await fileops('GET', 'premium/status'); _premSt = (_pr && _pr.providers) || {}; } catch (e) {}
+  var _premOpts = '<option value="auto">Auto (recommand\u00e9)</option>';
+  DL_PROVIDERS.forEach(function (p) {
+    if (_premSt[p.id] && _premSt[p.id].configured) {
+      _premOpts += '<option value="' + p.id + '">' + p.label + (p.type === 'debrid' ? ' (d\u00e9brideur)' : '') + '</option>';
+    }
+  });
+  _premOpts += '<option value="off">D\u00e9sactiv\u00e9 (direct)</option>';
   let h = '<div style="display:flex;gap:16px;align-items:stretch;flex-wrap:wrap;min-height:100%;">';
 
   // ── Volet gauche : réglages ──
@@ -7061,7 +7071,7 @@ async function dlRender() {
   h += formRow('Dossier de destination', '<div style="display:flex;gap:6px;"><input id="dl-dir" class="tnd-input" value="' + _dlDefaultDir.replace(/"/g,'&quot;') + '" style="flex:1;min-width:0;" /><button class="fs-btn" onclick="openFilePicker(\'dl-dir\',null,\'/mnt\')" title="Choisir un dossier">📁</button></div>');
   h += formRow('Connexions par lien', '<select id="dl-conn" class="tnd-input"><option value="1">1 (simple)</option><option value="2">2</option><option value="4">4</option><option value="8">8</option><option value="16">16</option></select>');
   h += formRow('Téléchargements simultanés', '<select id="dl-maxc" class="tnd-input"><option value="1">1</option><option value="2">2</option><option value="3">3</option><option value="4">4</option><option value="5">5</option><option value="6">6</option><option value="8">8</option><option value="10">10</option></select>');
-  h += formRow('Compte premium / débrideur', '<select id="dl-premium" class="tnd-input"><option value="auto">Auto</option><option value="force">Forcer</option><option value="off">Désactivé (direct)</option></select>');
+  h += formRow('Débrideur / compte premium', '<select id="dl-premium" class="tnd-input">' + _premOpts + '</select>');
   h += '<label class="tnd-switch" style="display:flex;width:100%;justify-content:space-between;gap:10px;"><span>Décompresser à la fin</span><input type="checkbox" id="dl-extract"></label>';
   h += '<label class="tnd-switch" style="display:flex;width:100%;justify-content:space-between;gap:10px;"><span>Retirer une fois terminé</span><input type="checkbox" id="dl-autoremove"></label>';
   h += '</div>';
@@ -7096,7 +7106,8 @@ async function dlRender() {
     var _p = JSON.parse(localStorage.getItem('tn-dl-prefs') || '{}');
     var _sd = document.getElementById('dl-dir'); if (_sd && _p.dir) _sd.value = _p.dir;
     var _sc = document.getElementById('dl-conn'); if (_sc && _p.conn) _sc.value = String(_p.conn);
-    var _sm = document.getElementById('dl-premium'); if (_sm && _p.premium) _sm.value = _p.premium;
+    var _sm = document.getElementById('dl-premium');
+    if (_sm && _p.premium) { _sm.value = _p.premium; if (!_sm.value) _sm.value = 'auto'; }
     var _se = document.getElementById('dl-extract'); if (_se) _se.checked = !!_p.extract;
     var _sr = document.getElementById('dl-autoremove'); if (_sr) _sr.checked = !!_p.autoremove;
   } catch (e) {}

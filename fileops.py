@@ -39,7 +39,7 @@ VM_DIR     = os.environ.get('VM_DIR',  '/mnt/Truenas_Stockage/vms')
 ISO_DIR    = os.environ.get('ISO_DIR', '/mnt/Truenas_Stockage')
 
 # ── Version & mise à jour ─────────────────────────────────────────────────────
-APP_VERSION = '1.3.2'
+APP_VERSION = '1.3.3'
 APP_DIR     = os.environ.get('APP_DIR', '')  # dossier d'install (contient fileops.py, HTML…)
 GITHUB_RAW  = os.environ.get('GITHUB_RAW', 'https://raw.githubusercontent.com/Nabief/truenas-desktop/main').rstrip('/')
 
@@ -4983,13 +4983,18 @@ _PREM_RESOLVERS = {'alldebrid': _resolve_alldebrid, 'realdebrid': _resolve_reald
                    'ddownload': _resolve_ddownload}
 
 
-def _resolve_premium(url):
+def _resolve_premium(url, prefer=None):
     """Résout un lien via compte direct de l'hôte puis débrideurs configurés.
-    Retourne {'link','filename','size','via'} ou lève."""
+    Si `prefer` est un fournisseur précis (choisi par l'utilisateur), on l'utilise
+    exclusivement. Retourne {'link','filename','size','via'} ou lève."""
     cfg = _prem_read()
     host = _host_of(url)
     order = []
-    if host.endswith('1fichier.com') and _prem_configured('onefichier', cfg):
+    if prefer and prefer in _PREM_PROVIDERS:
+        if not _prem_configured(prefer, cfg):
+            raise RuntimeError('Le fournisseur choisi (' + prefer + ") n'est pas configuré.")
+        order = [prefer]
+    elif host.endswith('1fichier.com') and _prem_configured('onefichier', cfg):
         order.append('onefichier')
     if host.endswith('rapidgator.net') and _prem_configured('rapidgator', cfg):
         order.append('rapidgator')
@@ -5643,11 +5648,13 @@ def _dl_worker(did):
             # page HTML au lieu du fichier. Si le lien n'a pas déjà été résolu et
             # qu'un débrideur généraliste est configuré (premium != off), on le
             # fait passer par le débrideur plutôt que d'enregistrer la page HTML.
+            _dl_prefer = it.get('premium') if it.get('premium') in _PREM_PROVIDERS else None
             if (not it.get('via')
                     and str(it.get('premium') or 'auto') != 'off'
                     and 'html' in (ctype or '')
-                    and any(_prem_configured(pr) for pr in _PREM_DEBRIDERS)):
-                r = _resolve_premium(it.get('source_url') or it['url'])
+                    and (_dl_prefer is not None
+                         or any(_prem_configured(pr) for pr in _PREM_DEBRIDERS))):
+                r = _resolve_premium(it.get('source_url') or it['url'], prefer=_dl_prefer)
                 newname = _dl_sanitize_name(r['filename']) if r.get('filename') else None
                 with _dl_lock:
                     it['url'] = r['link']
@@ -5714,15 +5721,21 @@ def _dl_add(url, dest_dir=None, filename=None, premium='auto', connections=None,
     resolved_name = None
     resolved_size = 0
     premium = str(premium or 'auto')
+    prefer = premium if premium in _PREM_PROVIDERS else None
     if premium != 'off':
-        want = (premium == 'force') or _is_known_hoster(url)
-        has_provider = any(_prem_configured(p) for p in _PREM_PROVIDERS)
+        want = (premium == 'force') or (prefer is not None) or _is_known_hoster(url)
+        if prefer is not None:
+            has_provider = _prem_configured(prefer)
+        else:
+            has_provider = any(_prem_configured(p) for p in _PREM_PROVIDERS)
         if want and has_provider:
-            r = _resolve_premium(url)  # peut lever -> remonte à l'appelant
+            r = _resolve_premium(url, prefer=prefer)  # peut lever -> remonte à l'appelant
             url = r['link']
             via = r.get('via')
             resolved_name = r.get('filename')
             resolved_size = r.get('size') or 0
+        elif want and prefer is not None:
+            raise ValueError('Débrideur choisi (' + prefer + ") non configuré dans « Comptes premium ».")
         elif want and not has_provider:
             raise ValueError('Lien d\'hébergeur premium détecté mais aucun compte/débrideur configuré.')
     if not filename:
