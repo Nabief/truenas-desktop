@@ -1,0 +1,34 @@
+# Secrets & configuration locale
+.env
+config.env
+premium.json
+.htpasswd
+
+# Authelia (secrets & données locales)
+authelia/secrets.env
+authelia/db.sqlite3
+authelia/notification.txt
+downloads.json
+
+# Données runtime
+data/
+mariadb/
+websites/
+_backups/
+releases/
+
+# Caches / artefacts
+__pycache__/
+*.pyc
+*.log
+
+# Dossiers outils
+.agents/
+.codex/
+
+# Fichier CSS obsolète (CSS ré-inliné dans le HTML)
+truenas-desktop.css
+
+# Divers
+*.bak
+*.tmp

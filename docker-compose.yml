@@ -1,0 +1,154 @@
+# Comportement commun des conteneurs php-fpm : réglages ini (/conf/ini) +
+# extensions (/conf/extensions.txt) installées via install-php-extensions,
+# rechargement à chaud de php-fpm sur .reload / .extreload.
+x-php-common: &php-common
+  restart: unless-stopped
+  environment:
+    PHP_INI_SCAN_DIR: ":/conf/ini"
+  command:
+    - sh
+    - -c
+    - |
+      apk add --no-cache curl >/dev/null 2>&1 || true
+      if [ ! -x /usr/local/bin/install-php-extensions ]; then
+        curl -sSLf https://github.com/mlocati/docker-php-extension-installer/releases/latest/download/install-php-extensions -o /usr/local/bin/install-php-extensions && chmod +x /usr/local/bin/install-php-extensions || true
+      fi
+      [ -s /conf/extensions.txt ] && install-php-extensions $$(cat /conf/extensions.txt) || true
+      ( last=""; lastext=""
+        while true; do
+          e=$$(cat /conf/.extreload 2>/dev/null)
+          if [ "$$e" != "$$lastext" ]; then lastext="$$e"; { [ -s /conf/extensions.txt ] && install-php-extensions $$(cat /conf/extensions.txt) >/dev/null 2>&1; } || true; kill -USR2 1 2>/dev/null || true; fi
+          v=$$(cat /conf/.reload 2>/dev/null)
+          if [ "$$v" != "$$last" ]; then last="$$v"; kill -USR2 1 2>/dev/null || true; fi
+          sleep 3
+        done ) &
+      exec php-fpm
+
+services:
+  truenas-desktop:
+    image: nginx:alpine
+    container_name: truenas-desktop
+    restart: unless-stopped
+    user: root
+    ports:
+      - "8099:80"
+    volumes:
+      - /mnt/Truenas_Stockage/apps/desktop/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      - /mnt/Truenas_Stockage/apps/desktop/truenas-desktop.html:/usr/share/nginx/html/index.html:ro
+      - /mnt/Truenas_Stockage/apps/desktop/vnc-viewer.html:/usr/share/nginx/html/vnc-viewer.html:ro
+      - /mnt/Truenas_Stockage/apps/desktop/.htpasswd:/etc/nginx/.htpasswd:ro
+
+    depends_on:
+      - fileops
+
+  fileops:
+    image: python:3.11-alpine
+    container_name: truenas-fileops
+    restart: unless-stopped
+    user: root
+    stdin_open: true
+    tty: true
+    environment:
+      FILEOPS_TOKEN: "${FILEOPS_TOKEN}"
+      FILEOPS_PORT: "8765"
+      FILEOPS_WS_PORT: "8766"
+      APP_DIR: "/mnt/Truenas_Stockage/apps/desktop"
+      GITHUB_RAW: "https://raw.githubusercontent.com/Nabief/truenas-desktop/main"
+      TRUENAS_SSH_HOST: "${TRUENAS_SSH_HOST}"
+      TRUENAS_SSH_USER: "${TRUENAS_SSH_USER}"
+      TRUENAS_SSH_PASS: "${TRUENAS_SSH_PASS}"
+      TRUENAS_SSH_PORT: "${TRUENAS_SSH_PORT:-22}"
+      VM_DIR: "/mnt/Truenas_Stockage/vms"
+      ISO_DIR: "/mnt/Truenas_Stockage/ISO"
+      WEB_CONF_DIR: "/mnt/Truenas_Stockage/apps/desktop/websites/conf.d"
+      WEB_PHP_VERSIONS: '{"8.3":"truenas-php83:9000","8.2":"truenas-php82:9000","8.1":"truenas-php81:9000","7.4":"truenas-php74:9000"}'
+      WEB_PHP_DEFAULT: "8.3"
+      WEB_PHP_DIR: "/mnt/Truenas_Stockage/apps/desktop/websites/php"
+      WEB_PROXY_PORT: "8080"
+      DB_HOST: "mariadb"
+      DB_PORT: "3306"
+      DB_ROOT_PASSWORD: "${DB_ROOT_PASSWORD}"
+    volumes:
+      - /mnt:/mnt
+      - /mnt/Truenas_Stockage/apps/desktop/fileops.py:/app/fileops.py:ro
+    command: sh -c "apk add --no-cache qemu-img ca-certificates && { apk add --no-cache p7zip libarchive-tools 2>/dev/null || true; apk add --no-cache unrar 2>/dev/null || true; } && pip install websockets paramiko pymysql --break-system-packages -q && python /app/fileops.py"
+    expose:
+      - "8765"
+      - "8766"
+
+  # ── Sites Web : nginx dédié servant les sites gérés (statique / php / proxy) ──
+  websites:
+    image: nginx:alpine
+    container_name: truenas-websites
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+      - "8100-8130:8100-8130"
+    volumes:
+      - /mnt:/mnt
+      - /mnt/Truenas_Stockage/apps/desktop/websites/conf.d:/etc/nginx/conf.d
+    command:
+      - sh
+      - -c
+      - |
+        last=""
+        ( while true; do
+            v=$$(cat /etc/nginx/conf.d/.reload 2>/dev/null)
+            if [ "$$v" != "$$last" ]; then last="$$v"; nginx -t && nginx -s reload; fi
+            sleep 3
+          done ) &
+        exec nginx -g 'daemon off;'
+    depends_on:
+      - php83
+      - php82
+      - php81
+      - php74
+
+  # ── PHP-FPM : un conteneur par version (profils PHP) ──
+  php83:
+    <<: *php-common
+    image: php:8.3-fpm-alpine
+    container_name: truenas-php83
+    volumes:
+      - /mnt:/mnt
+      - /mnt/Truenas_Stockage/apps/desktop/websites/php/8.3:/conf
+
+  php82:
+    <<: *php-common
+    image: php:8.2-fpm-alpine
+    container_name: truenas-php82
+    volumes:
+      - /mnt:/mnt
+      - /mnt/Truenas_Stockage/apps/desktop/websites/php/8.2:/conf
+
+  php81:
+    <<: *php-common
+    image: php:8.1-fpm-alpine
+    container_name: truenas-php81
+    volumes:
+      - /mnt:/mnt
+      - /mnt/Truenas_Stockage/apps/desktop/websites/php/8.1:/conf
+
+  php74:
+    <<: *php-common
+    image: php:7.4-fpm-alpine
+    container_name: truenas-php74
+    volumes:
+      - /mnt:/mnt
+      - /mnt/Truenas_Stockage/apps/desktop/websites/php/7.4:/conf
+
+  # ── MariaDB pour les applications web (WordPress, Nextcloud…) ──
+  mariadb:
+    image: mariadb:11
+    container_name: truenas-mariadb
+    restart: unless-stopped
+    environment:
+      MARIADB_ROOT_PASSWORD: "${DB_ROOT_PASSWORD}"
+      MARIADB_AUTO_UPGRADE: "1"
+    # Port NON publié sur l'hôte : accès uniquement via le réseau Docker interne
+    # (fileops utilise DB_HOST=mariadb). Décommente 'ports' seulement si un outil
+    # externe doit se connecter à la base.
+    expose:
+      - "3306"
+    volumes:
+      - /mnt/Truenas_Stockage/apps/desktop/mariadb:/var/lib/mysql

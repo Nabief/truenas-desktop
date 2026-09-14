@@ -71,9 +71,14 @@ L'installation se fait via un **assistant web** (formulaire) : une seule command
 
 ## Notes
 
-- **Sécurité** : l'assistant active l'auth SSH par mot de passe et le sudo NOPASSWD
-  pour le compte indiqué — pratique mais à assumer. Une variante par clé SSH dédiée
-  est possible pour durcir.
+- **Sécurité** — À LIRE (voir `SECURITE.md`). Le bureau donne un contrôle root du NAS ;
+  une **barrière d'authentification** protège désormais l'accès (login exigé avant la
+  page et les endpoints fileops/terminal/VNC ; `.htpasswd` généré à l'install). Règles
+  essentielles : **ne jamais exposer le bureau à Internet** (pas de reverse proxy public —
+  utiliser un VPN pour l'accès distant), et disposer de **snapshots ZFS + une sauvegarde
+  hors-machine** que le bureau ne peut pas supprimer. L'assistant active aussi l'auth SSH
+  par mot de passe et le sudo NOPASSWD ; une **clé SSH dédiée** + désactivation du mot de
+  passe SSH durcissent davantage. Détails et activation sur install existante : `SECURITE.md`.
 - **TrueNAS 25.04+ (Fangtooth)** : la virtualisation est passée de libvirt/KVM à
   **Incus**. Sur ces versions, le module VMs (basé sur virsh/libvirt) ne fonctionne
   pas en l'état ; le reste du bureau (fichiers, Docker, sites, téléchargements)

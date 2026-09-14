@@ -1,0 +1,205 @@
+# =====================================================================
+#  TrueNAS Desktop — Déploiement 100% interface web (aucun shell requis)
+#  À coller dans : Apps → Discover Apps → Custom App → "Install via YAML"
+#
+#  AVANT DE COLLER :
+#   1) Remplace PARTOUT « /mnt/POOL » par ton pool (ex: /mnt/tank)
+#   2) Renseigne toutes les valeurs marquees « MODIFIER »
+#      (le TOKEN et le mot de passe DB doivent etre IDENTIQUES aux 2 endroits)
+#
+#  PRE-REQUIS (dans l'UI TrueNAS, sans shell) :
+#   - Storage : creer le dataset  POOL/apps/desktop
+#   - System > Services > SSH : Start + Start Automatically
+#   - un utilisateur admin (ex: truenas_admin) avec sudo (Local Administrator)
+# =====================================================================
+
+services:
+  app-init:
+    image: alpine:3.20
+    container_name: truenas-desktop-init
+    restart: "no"
+    environment:
+      GITHUB_RAW: "https://raw.githubusercontent.com/Nabief/truenas-desktop/main"
+      FILEOPS_TOKEN: "CHANGE_ME_TOKEN"
+      TRUENAS_IP: "192.168.1.10"
+      TRUENAS_HOST: "192.168.1.10"
+      TRUENAS_UI_URL: "http://192.168.1.10"
+      DESK_AUTH_USER: "admin"                 # ← MODIFIER (login du bureau)
+      DESK_AUTH_PASS: "CHANGE_ME_DESK_PASS"   # ← MODIFIER (mot de passe du bureau)
+      DATA_DIR: "/data"
+    volumes:
+      - /mnt/POOL/apps/desktop:/data
+    command:
+      - sh
+      - -c
+      - "apk add --no-cache curl >/dev/null 2>&1 || true; wget -qO /tmp/app-init.sh \"$$GITHUB_RAW/app-init.sh\" || curl -fsSL \"$$GITHUB_RAW/app-init.sh\" -o /tmp/app-init.sh; sh /tmp/app-init.sh"
+
+  truenas-desktop:
+    image: nginx:alpine
+    container_name: truenas-desktop
+    restart: unless-stopped
+    user: root
+    ports:
+      - "8099:80"
+    volumes:
+      - /mnt/POOL/apps/desktop/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      - /mnt/POOL/apps/desktop/truenas-desktop.html:/usr/share/nginx/html/index.html:ro
+      - /mnt/POOL/apps/desktop/vnc-viewer.html:/usr/share/nginx/html/vnc-viewer.html:ro
+      - /mnt/POOL/apps/desktop/.htpasswd:/etc/nginx/.htpasswd:ro
+
+    depends_on:
+      app-init:
+        condition: service_completed_successfully
+      fileops:
+        condition: service_started
+
+  fileops:
+    image: python:3.11-alpine
+    container_name: truenas-fileops
+    restart: unless-stopped
+    user: root
+    stdin_open: true
+    tty: true
+    environment:
+      FILEOPS_TOKEN: "CHANGE_ME_TOKEN"
+      FILEOPS_PORT: "8765"
+      FILEOPS_WS_PORT: "8766"
+      HOST_BOOTSTRAP: "1"
+      APP_DIR: "/mnt/POOL/apps/desktop"
+      GITHUB_RAW: "https://raw.githubusercontent.com/Nabief/truenas-desktop/main"
+      TRUENAS_SSH_HOST: "192.168.1.10"
+      TRUENAS_SSH_USER: "truenas_admin"
+      TRUENAS_SSH_PASS: "CHANGE_ME_SSH"
+      TRUENAS_SSH_PORT: "22"
+      VM_DIR: "/mnt/POOL/vms"
+      ISO_DIR: "/mnt/POOL"
+      WEB_CONF_DIR: "/mnt/POOL/apps/desktop/websites/conf.d"
+      WEB_PHP_VERSIONS: '{"8.3":"truenas-php83:9000","8.2":"truenas-php82:9000","8.1":"truenas-php81:9000","7.4":"truenas-php74:9000"}'
+      WEB_PHP_DEFAULT: "8.3"
+      WEB_PHP_DIR: "/mnt/POOL/apps/desktop/websites/php"
+      WEB_PROXY_PORT: "8080"
+      DB_HOST: "mariadb"
+      DB_PORT: "3306"
+      DB_ROOT_PASSWORD: "CHANGE_ME_DB"
+    volumes:
+      - /mnt:/mnt
+      - /mnt/POOL/apps/desktop/fileops.py:/app/fileops.py:ro
+    command:
+      - sh
+      - -c
+      - "apk add --no-cache qemu-img ca-certificates >/dev/null 2>&1; apk add --no-cache p7zip libarchive-tools >/dev/null 2>&1 || true; apk add --no-cache unrar >/dev/null 2>&1 || true; pip install websockets paramiko pymysql --break-system-packages -q; python /app/fileops.py"
+    expose:
+      - "8765"
+      - "8766"
+    depends_on:
+      app-init:
+        condition: service_completed_successfully
+
+  websites:
+    image: nginx:alpine
+    container_name: truenas-websites
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+      - "8100-8130:8100-8130"
+    volumes:
+      - /mnt:/mnt
+      - /mnt/POOL/apps/desktop/websites/conf.d:/etc/nginx/conf.d
+    command:
+      - sh
+      - -c
+      - "last=''; ( while true; do v=$$(cat /etc/nginx/conf.d/.reload 2>/dev/null); if [ \"$$v\" != \"$$last\" ]; then last=\"$$v\"; nginx -t && nginx -s reload; fi; sleep 3; done ) & exec nginx -g 'daemon off;'"
+    depends_on:
+      app-init:
+        condition: service_completed_successfully
+      php83:
+        condition: service_started
+      php82:
+        condition: service_started
+      php81:
+        condition: service_started
+      php74:
+        condition: service_started
+
+  php83:
+    image: php:8.3-fpm-alpine
+    container_name: truenas-php83
+    restart: unless-stopped
+    environment:
+      PHP_INI_SCAN_DIR: ":/conf/ini"
+    volumes:
+      - /mnt:/mnt
+      - /mnt/POOL/apps/desktop/websites/php/8.3:/conf
+    command:
+      - sh
+      - -c
+      - "apk add --no-cache curl >/dev/null 2>&1 || true; [ -x /usr/local/bin/install-php-extensions ] || { curl -sSLf https://github.com/mlocati/docker-php-extension-installer/releases/latest/download/install-php-extensions -o /usr/local/bin/install-php-extensions && chmod +x /usr/local/bin/install-php-extensions; }; [ -s /conf/extensions.txt ] && install-php-extensions $$(cat /conf/extensions.txt) || true; ( last=''; lastext=''; while true; do e=$$(cat /conf/.extreload 2>/dev/null); if [ \"$$e\" != \"$$lastext\" ]; then lastext=\"$$e\"; { [ -s /conf/extensions.txt ] && install-php-extensions $$(cat /conf/extensions.txt) >/dev/null 2>&1; } || true; kill -USR2 1 2>/dev/null || true; fi; v=$$(cat /conf/.reload 2>/dev/null); if [ \"$$v\" != \"$$last\" ]; then last=\"$$v\"; kill -USR2 1 2>/dev/null || true; fi; sleep 3; done ) & exec php-fpm"
+    depends_on:
+      app-init:
+        condition: service_completed_successfully
+
+  php82:
+    image: php:8.2-fpm-alpine
+    container_name: truenas-php82
+    restart: unless-stopped
+    environment:
+      PHP_INI_SCAN_DIR: ":/conf/ini"
+    volumes:
+      - /mnt:/mnt
+      - /mnt/POOL/apps/desktop/websites/php/8.2:/conf
+    command:
+      - sh
+      - -c
+      - "apk add --no-cache curl >/dev/null 2>&1 || true; [ -x /usr/local/bin/install-php-extensions ] || { curl -sSLf https://github.com/mlocati/docker-php-extension-installer/releases/latest/download/install-php-extensions -o /usr/local/bin/install-php-extensions && chmod +x /usr/local/bin/install-php-extensions; }; [ -s /conf/extensions.txt ] && install-php-extensions $$(cat /conf/extensions.txt) || true; ( last=''; lastext=''; while true; do e=$$(cat /conf/.extreload 2>/dev/null); if [ \"$$e\" != \"$$lastext\" ]; then lastext=\"$$e\"; { [ -s /conf/extensions.txt ] && install-php-extensions $$(cat /conf/extensions.txt) >/dev/null 2>&1; } || true; kill -USR2 1 2>/dev/null || true; fi; v=$$(cat /conf/.reload 2>/dev/null); if [ \"$$v\" != \"$$last\" ]; then last=\"$$v\"; kill -USR2 1 2>/dev/null || true; fi; sleep 3; done ) & exec php-fpm"
+    depends_on:
+      app-init:
+        condition: service_completed_successfully
+
+  php81:
+    image: php:8.1-fpm-alpine
+    container_name: truenas-php81
+    restart: unless-stopped
+    environment:
+      PHP_INI_SCAN_DIR: ":/conf/ini"
+    volumes:
+      - /mnt:/mnt
+      - /mnt/POOL/apps/desktop/websites/php/8.1:/conf
+    command:
+      - sh
+      - -c
+      - "apk add --no-cache curl >/dev/null 2>&1 || true; [ -x /usr/local/bin/install-php-extensions ] || { curl -sSLf https://github.com/mlocati/docker-php-extension-installer/releases/latest/download/install-php-extensions -o /usr/local/bin/install-php-extensions && chmod +x /usr/local/bin/install-php-extensions; }; [ -s /conf/extensions.txt ] && install-php-extensions $$(cat /conf/extensions.txt) || true; ( last=''; lastext=''; while true; do e=$$(cat /conf/.extreload 2>/dev/null); if [ \"$$e\" != \"$$lastext\" ]; then lastext=\"$$e\"; { [ -s /conf/extensions.txt ] && install-php-extensions $$(cat /conf/extensions.txt) >/dev/null 2>&1; } || true; kill -USR2 1 2>/dev/null || true; fi; v=$$(cat /conf/.reload 2>/dev/null); if [ \"$$v\" != \"$$last\" ]; then last=\"$$v\"; kill -USR2 1 2>/dev/null || true; fi; sleep 3; done ) & exec php-fpm"
+    depends_on:
+      app-init:
+        condition: service_completed_successfully
+
+  php74:
+    image: php:7.4-fpm-alpine
+    container_name: truenas-php74
+    restart: unless-stopped
+    environment:
+      PHP_INI_SCAN_DIR: ":/conf/ini"
+    volumes:
+      - /mnt:/mnt
+      - /mnt/POOL/apps/desktop/websites/php/7.4:/conf
+    command:
+      - sh
+      - -c
+      - "apk add --no-cache curl >/dev/null 2>&1 || true; [ -x /usr/local/bin/install-php-extensions ] || { curl -sSLf https://github.com/mlocati/docker-php-extension-installer/releases/latest/download/install-php-extensions -o /usr/local/bin/install-php-extensions && chmod +x /usr/local/bin/install-php-extensions; }; [ -s /conf/extensions.txt ] && install-php-extensions $$(cat /conf/extensions.txt) || true; ( last=''; lastext=''; while true; do e=$$(cat /conf/.extreload 2>/dev/null); if [ \"$$e\" != \"$$lastext\" ]; then lastext=\"$$e\"; { [ -s /conf/extensions.txt ] && install-php-extensions $$(cat /conf/extensions.txt) >/dev/null 2>&1; } || true; kill -USR2 1 2>/dev/null || true; fi; v=$$(cat /conf/.reload 2>/dev/null); if [ \"$$v\" != \"$$last\" ]; then last=\"$$v\"; kill -USR2 1 2>/dev/null || true; fi; sleep 3; done ) & exec php-fpm"
+    depends_on:
+      app-init:
+        condition: service_completed_successfully
+
+  mariadb:
+    image: mariadb:11
+    container_name: truenas-mariadb
+    restart: unless-stopped
+    environment:
+      MARIADB_ROOT_PASSWORD: "CHANGE_ME_DB"
+      MARIADB_AUTO_UPGRADE: "1"
+    expose:
+      - "3306"
+    volumes:
+      - /mnt/POOL/apps/desktop/mariadb:/var/lib/mysql
+    depends_on:
+      app-init:
+        condition: service_completed_successfully

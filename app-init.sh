@@ -45,8 +45,26 @@ server {
     client_body_timeout 3600s;
     root /usr/share/nginx/html;
     index index.html;
+    # ── Barrière d'authentification devant tout le bureau ────────────
+    # Login exigé avant d'accéder à la page (qui contient le token) et aux
+    # endpoints fileops / terminal / VNC. /s/ (partages publics) est exempté.
+    # 2FA : déléguer à un portail (Authelia / authentik) via auth_request.
+    auth_basic           "TrueNAS Desktop";
+    auth_basic_user_file /etc/nginx/.htpasswd;
 
     location / { try_files \$uri /index.html; }
+
+    location = /api/current {
+        proxy_pass            https://${TRUENAS_IP}/api/current;
+        proxy_http_version    1.1;
+        proxy_set_header      Upgrade           \$http_upgrade;
+        proxy_set_header      Connection        "upgrade";
+        proxy_set_header      Host              ${TRUENAS_HOST};
+        proxy_ssl_verify      off;
+        proxy_ssl_server_name off;
+        proxy_read_timeout    3600s;
+        proxy_send_timeout    3600s;
+    }
 
     location /api/ {
         proxy_pass          https://${TRUENAS_IP}/api/;
@@ -72,6 +90,7 @@ server {
     }
 
     location /s/ {
+        auth_basic off;
         proxy_pass            http://fileops:8765/s/;
         proxy_http_version    1.1;
         proxy_set_header      Host \$host;
@@ -132,5 +151,20 @@ server {
     }
 }
 NGINX
+
+echo "▸ Génération de .htpasswd (barrière d'auth du bureau)"
+DESK_AUTH_USER="${DESK_AUTH_USER:-admin}"
+if [ -z "${DESK_AUTH_PASS:-}" ]; then
+  DESK_AUTH_PASS="$(head -c 64 /dev/urandom | tr -dc 'A-Za-z0-9' | head -c 16)"
+  echo "  Mot de passe bureau généré : $DESK_AUTH_PASS"
+fi
+if apk add --no-cache apache2-utils >/dev/null 2>&1; then
+  htpasswd -bc "$D/.htpasswd" "$DESK_AUTH_USER" "$DESK_AUTH_PASS" || : > "$D/.htpasswd"
+elif apk add --no-cache openssl >/dev/null 2>&1; then
+  printf '%s:%s\n' "$DESK_AUTH_USER" "$(openssl passwd -apr1 "$DESK_AUTH_PASS")" > "$D/.htpasswd"
+else
+  echo "  ⚠ ni apache2-utils ni openssl — .htpasswd vide"; : > "$D/.htpasswd"
+fi
+chmod 600 "$D/.htpasswd" 2>/dev/null || true
 
 echo "✓ Init terminé — fichiers prêts dans $D"

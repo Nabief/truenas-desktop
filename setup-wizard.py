@@ -188,6 +188,83 @@ def run_install(config):
         token        = config['token'] or generate_token()
         db_pass      = config.get('db_pass') or generate_token()
 
+        # ── Sécurité : identifiants du bureau + 2FA optionnelle ──
+        desk_user   = config.get('desk_user') or 'admin'
+        desk_pass   = config.get('desk_pass') or secrets.token_urlsafe(12)
+        enable_2fa  = bool(config.get('enable_2fa'))
+        domain_desktop = (config.get('domain_desktop') or '').strip().lower()
+        domain_auth    = (config.get('domain_auth') or '').strip().lower()
+        admin_email    = (config.get('admin_email') or 'admin@example.com').strip()
+        if enable_2fa and (not domain_desktop or not domain_auth):
+            emit('⚠ 2FA demandée mais domaines manquants — 2FA désactivée (barrière simple conservée).', 'warn')
+            enable_2fa = False
+        domain_parent = domain_desktop.split('.', 1)[1] if (enable_2fa and '.' in domain_desktop) else ''
+
+        if enable_2fa:
+            _srv_auth = (
+                "    resolver 127.0.0.11 valid=30s ipv6=off;\n"
+                "    auth_request /internal/authelia/authz;\n"
+                "    auth_request_set $user $upstream_http_remote_user;\n"
+                "    auth_request_set $groups $upstream_http_remote_groups;\n"
+                "    auth_request_set $name $upstream_http_remote_name;\n"
+                "    auth_request_set $email $upstream_http_remote_email;\n"
+                "    auth_request_set $redirection_url $upstream_http_location;\n"
+                "    error_page 401 =302 $redirection_url;\n"
+                "    location /internal/authelia/authz {\n"
+                "        internal;\n"
+                "        set $authelia http://authelia:9091/api/authz/auth-request;\n"
+                "        proxy_pass $authelia;\n"
+                "        proxy_set_header X-Original-Method $request_method;\n"
+                "        proxy_set_header X-Original-URL $scheme://$host$request_uri;\n"
+                "        proxy_set_header X-Forwarded-For $remote_addr;\n"
+                "        proxy_set_header Content-Length \"\";\n"
+                "        proxy_pass_request_body off;\n"
+                "        proxy_http_version 1.1;\n"
+                "        proxy_set_header Connection \"\";\n"
+                "    }"
+            )
+            _s_exempt = "auth_request off;"
+            _server_name = domain_desktop
+            _extra_server = (
+                "\n\nserver {\n"
+                "    listen 80;\n"
+                "    server_name " + domain_auth + ";\n"
+                "    location / {\n"
+                "        proxy_pass http://authelia:9091;\n"
+                "        proxy_set_header Host $host;\n"
+                "        proxy_set_header X-Forwarded-Proto $scheme;\n"
+                "        proxy_set_header X-Forwarded-For $remote_addr;\n"
+                "        proxy_http_version 1.1;\n"
+                "        proxy_set_header Upgrade $http_upgrade;\n"
+                "        proxy_set_header Connection \"upgrade\";\n"
+                "        proxy_read_timeout 3600s;\n"
+                "    }\n"
+                "}"
+            )
+            _authelia_service = (
+                "\n  authelia:\n"
+                "    image: authelia/authelia:4.39\n"
+                "    container_name: truenas-authelia\n"
+                "    restart: unless-stopped\n"
+                "    expose:\n"
+                "      - \"9091\"\n"
+                "    volumes:\n"
+                "      - " + install_dir + "/authelia:/config\n"
+                "    env_file:\n"
+                "      - " + install_dir + "/authelia/secrets.env\n"
+                "    environment:\n"
+                "      TZ: \"Europe/Paris\"\n"
+                "    healthcheck:\n"
+                "      disable: true\n"
+            )
+        else:
+            _srv_auth = ('    auth_basic           "TrueNAS Desktop";\n'
+                         '    auth_basic_user_file /etc/nginx/.htpasswd;')
+            _s_exempt = "auth_basic off;"
+            _server_name = "_"
+            _extra_server = ""
+            _authelia_service = ""
+
         script_dir = os.path.dirname(os.path.abspath(__file__))
 
         # ── 1. Datasets / répertoires ─────────────────────────
@@ -307,6 +384,8 @@ GITHUB_RAW={(config.get('github_raw') or GITHUB_RAW_DEFAULT).rstrip('/')}
       - {install_dir}/nginx.conf:/etc/nginx/conf.d/default.conf:ro
       - {install_dir}/truenas-desktop.html:/usr/share/nginx/html/index.html:ro
       - {install_dir}/vnc-viewer.html:/usr/share/nginx/html/vnc-viewer.html:ro
+      - {install_dir}/.htpasswd:/etc/nginx/.htpasswd:ro
+
     depends_on:
       - fileops
 
@@ -378,7 +457,7 @@ GITHUB_RAW={(config.get('github_raw') or GITHUB_RAW_DEFAULT).rstrip('/')}
       - "3306"
     volumes:
       - {install_dir}/mariadb:/var/lib/mysql
-"""
+{_authelia_service}"""
         with open(os.path.join(install_dir, 'docker-compose.yml'), 'w') as f:
             f.write(compose)
         # Sauvegarde du mot de passe DB dans la config
@@ -393,11 +472,16 @@ GITHUB_RAW={(config.get('github_raw') or GITHUB_RAW_DEFAULT).rstrip('/')}
         emit('▸ Génération de nginx.conf...', 'step')
         nginx = f"""server {{
     listen 80;
-    server_name _;
+    server_name {_server_name};
     client_max_body_size 20g;
     client_body_timeout 3600s;
     root /usr/share/nginx/html;
     index index.html;
+    # ── Barrière d'authentification devant tout le bureau ────────────
+    # Login exigé avant d'accéder à la page (qui contient le token) et aux
+    # endpoints fileops / terminal / VNC. /s/ (partages publics) est exempté.
+    # 2FA : déléguer à un portail (Authelia / authentik) via auth_request.
+{_srv_auth}
 
     location / {{
         try_files $uri /index.html;
@@ -416,6 +500,7 @@ GITHUB_RAW={(config.get('github_raw') or GITHUB_RAW_DEFAULT).rstrip('/')}
     }}
 
     location /s/ {{
+        {_s_exempt}
         proxy_pass            http://fileops:8765/s/;
         proxy_http_version    1.1;
         proxy_set_header      Host $host;
@@ -497,10 +582,79 @@ GITHUB_RAW={(config.get('github_raw') or GITHUB_RAW_DEFAULT).rstrip('/')}
         proxy_read_timeout    3600s;
         proxy_send_timeout    3600s;
     }}
-}}"""
+}}{_extra_server}"""
         with open(os.path.join(install_dir, 'nginx.conf'), 'w') as f:
             f.write(nginx)
         emit('✓ nginx.conf', 'ok')
+
+        # ── .htpasswd (barrière d'auth du bureau) ──────────────
+        emit('▸ Génération de .htpasswd (barrière d\'auth)...', 'step')
+        desk_user = config.get('desk_user') or 'admin'
+        desk_pass = config.get('desk_pass') or secrets.token_urlsafe(12)
+        try:
+            _h = subprocess.check_output(['openssl', 'passwd', '-apr1', desk_pass]).decode().strip()
+            with open(os.path.join(install_dir, '.htpasswd'), 'w') as f:
+                f.write('%s:%s\n' % (desk_user, _h))
+            os.chmod(os.path.join(install_dir, '.htpasswd'), 0o600)
+            emit('✓ Accès bureau — utilisateur: %s  mot de passe: %s' % (desk_user, desk_pass), 'ok')
+        except Exception as e:
+            emit('⚠ .htpasswd non généré: %s' % e, 'warn')
+            open(os.path.join(install_dir, '.htpasswd'), 'w').close()
+
+        # ── Authelia (2FA) : secrets + hash + fichiers de config ──
+        if enable_2fa:
+            emit('▸ Configuration Authelia (2FA)...', 'step')
+            adir = os.path.join(install_dir, 'authelia')
+            os.makedirs(adir, exist_ok=True)
+            with open(os.path.join(adir, 'secrets.env'), 'w') as f:
+                f.write('AUTHELIA_SESSION_SECRET=%s\n' % secrets.token_hex(32))
+                f.write('AUTHELIA_STORAGE_ENCRYPTION_KEY=%s\n' % secrets.token_hex(32))
+                f.write('AUTHELIA_IDENTITY_VALIDATION_RESET_PASSWORD_JWT_SECRET=%s\n' % secrets.token_hex(32))
+            try:
+                os.chmod(os.path.join(adir, 'secrets.env'), 0o600)
+            except Exception:
+                pass
+            pw_hash = ''
+            try:
+                _out = subprocess.check_output(
+                    ['docker', 'run', '--rm', 'authelia/authelia:4.39',
+                     'authelia', 'crypto', 'hash', 'generate', 'argon2',
+                     '--password', desk_pass],
+                    stderr=subprocess.STDOUT, timeout=240).decode()
+                _m = re.search(r'\$argon2id\$[^\s]+', _out)
+                pw_hash = _m.group(0) if _m else ''
+            except Exception as e:
+                emit('⚠ Hash Authelia non généré (%s) — à compléter dans users_database.yml' % e, 'warn')
+            with open(os.path.join(adir, 'users_database.yml'), 'w') as f:
+                f.write('users:\n')
+                f.write('  %s:\n' % desk_user)
+                f.write('    disabled: false\n')
+                f.write("    displayname: '%s'\n" % desk_user)
+                f.write("    password: '%s'\n" % (pw_hash or 'REMPLACE_PAR_LE_HASH_ARGON2ID'))
+                f.write("    email: '%s'\n" % admin_email)
+                f.write('    groups:\n      - admins\n')
+            cfg = (
+                "theme: 'dark'\n"
+                "log:\n  level: 'info'\n"
+                "server:\n  address: 'tcp://:9091'\n"
+                "totp:\n  issuer: 'TrueNAS Desktop'\n  period: 30\n"
+                "authentication_backend:\n  file:\n    path: '/config/users_database.yml'\n"
+                "access_control:\n  default_policy: 'deny'\n  rules:\n"
+                "    - domain: '%s'\n      policy: 'two_factor'\n" % domain_desktop +
+                "session:\n  cookies:\n"
+                "    - name: 'authelia_session'\n"
+                "      domain: '%s'\n" % domain_parent +
+                "      authelia_url: 'http://%s:%s'\n" % (domain_auth, port) +
+                "      default_redirection_url: 'http://%s:%s'\n" % (domain_desktop, port) +
+                "      expiration: '1h'\n      inactivity: '15m'\n"
+                "storage:\n  local:\n    path: '/config/db.sqlite3'\n"
+                "notifier:\n  filesystem:\n    filename: '/config/notification.txt'\n"
+            )
+            with open(os.path.join(adir, 'configuration.yml'), 'w') as f:
+                f.write(cfg)
+            emit('✓ Authelia configuré (utilisateur: %s)' % desk_user, 'ok')
+            emit('➤ DNS à créer (réseau local) : %s → %s  et  %s → %s' % (domain_desktop, truenas_ip, domain_auth, truenas_ip), 'step')
+            emit('➤ Enrôlement TOTP après démarrage : lien dans %s/authelia/notification.txt' % install_dir, 'step')
 
         # ── 7. Configuration host TrueNAS ─────────────────────
         host_script = os.path.join(install_dir, 'setup-truenas-host.sh')
@@ -784,6 +938,35 @@ HTML = """<!DOCTYPE html>
         <div class="hint">Clé secrète entre le navigateur et le service fileops.</div>
       </div>
 
+      <div class="form-group">
+        <label>Accès au bureau — identifiant</label>
+        <input id="desk_user" value="admin" />
+        <div class="hint">Login exigé avant d'accéder au bureau (barrière serveur).</div>
+      </div>
+      <div class="form-group">
+        <label>Accès au bureau — mot de passe</label>
+        <input id="desk_pass" type="password" placeholder="Laissez vide pour générer" />
+      </div>
+      <div class="form-group">
+        <label><input type="checkbox" id="enable_2fa" onchange="document.getElementById('twofa').hidden=!this.checked" style="width:auto;margin-right:8px;vertical-align:middle;" />Activer la double authentification (2FA / Authelia)</label>
+        <div class="hint">Ajoute un code TOTP. Nécessite 2 domaines locaux (ci-dessous).</div>
+      </div>
+      <div id="twofa" hidden>
+        <div class="form-group">
+          <label>Domaine du bureau</label>
+          <input id="domain_desktop" placeholder="desktop.exemple.fr" />
+        </div>
+        <div class="form-group">
+          <label>Domaine du portail 2FA</label>
+          <input id="domain_auth" placeholder="auth.exemple.fr" />
+        </div>
+        <div class="form-group">
+          <label>E-mail administrateur</label>
+          <input id="admin_email" placeholder="admin@exemple.fr" />
+        </div>
+        <div class="hint">Prérequis : crée ces 2 domaines dans ton DNS local (→ IP du NAS). L'enrôlement TOTP se fait après l'installation.</div>
+      </div>
+
       <div class="actions">
         <button class="btn btn-secondary" onclick="goTo(1)">← Retour</button>
         <button class="btn btn-primary"   onclick="startInstall()">Installer →</button>
@@ -943,6 +1126,12 @@ function startInstall() {
     ssh_user:     document.getElementById('ssh_user').value.trim(),
     ssh_pass:     pass,
     token:        document.getElementById('token').value.trim(),
+    desk_user:      document.getElementById('desk_user').value.trim(),
+    desk_pass:      document.getElementById('desk_pass').value.trim(),
+    enable_2fa:     document.getElementById('enable_2fa').checked,
+    domain_desktop: document.getElementById('domain_desktop').value.trim(),
+    domain_auth:    document.getElementById('domain_auth').value.trim(),
+    admin_email:    document.getElementById('admin_email').value.trim(),
   };
 
   goTo(3);
