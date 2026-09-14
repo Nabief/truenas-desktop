@@ -1,0 +1,14 @@
+# Utilisateurs Authelia. Le mot de passe est un HASH argon2id (jamais en clair).
+# Générer le hash (voir AUTHELIA.md) :
+#   docker run --rm authelia/authelia:4.39 \
+#     authelia crypto hash generate argon2 --password 'TON_MOT_DE_PASSE'
+# puis coller la chaîne « $argon2id$... » ci-dessous.
+
+users:
+  admin:
+    disabled: false
+    displayname: 'Admin'
+    password: 'REMPLACE_PAR_LE_HASH_ARGON2ID'
+    email: 'admin@example.com'
+    groups:
+      - 'admins'
