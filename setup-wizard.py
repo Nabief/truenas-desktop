@@ -589,17 +589,18 @@ GITHUB_RAW={(config.get('github_raw') or GITHUB_RAW_DEFAULT).rstrip('/')}
 
         # ── .htpasswd (barrière d'auth du bureau) ──────────────
         emit('▸ Génération de .htpasswd (barrière d\'auth)...', 'step')
-        desk_user = config.get('desk_user') or 'admin'
-        desk_pass = config.get('desk_pass') or secrets.token_urlsafe(12)
         try:
             _h = subprocess.check_output(['openssl', 'passwd', '-apr1', desk_pass]).decode().strip()
-            with open(os.path.join(install_dir, '.htpasswd'), 'w') as f:
+            _htp = os.path.join(install_dir, '.htpasswd')
+            with open(_htp, 'w') as f:
                 f.write('%s:%s\n' % (desk_user, _h))
-            os.chmod(os.path.join(install_dir, '.htpasswd'), 0o600)
+            try:
+                os.chmod(_htp, 0o600)
+            except OSError:
+                pass  # chmod refusé sur ZFS (ACL) — non bloquant
             emit('✓ Accès bureau — utilisateur: %s  mot de passe: %s' % (desk_user, desk_pass), 'ok')
         except Exception as e:
-            emit('⚠ .htpasswd non généré: %s' % e, 'warn')
-            open(os.path.join(install_dir, '.htpasswd'), 'w').close()
+            emit('⚠ .htpasswd non généré: %s — barrière inactive, à refaire à la main' % e, 'warn')
 
         # ── Authelia (2FA) : secrets + hash + fichiers de config ──
         if enable_2fa:

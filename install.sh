@@ -169,7 +169,7 @@ success "Répertoires créés"
 # ── .htpasswd (barrière d'auth du bureau) ──────────────
 if command -v openssl >/dev/null 2>&1; then
   printf '%s:%s\n' "$DESK_AUTH_USER" "$(openssl passwd -apr1 "$DESK_AUTH_PASS")" > "$INSTALL_DIR/.htpasswd"
-  chmod 600 "$INSTALL_DIR/.htpasswd"
+  chmod 600 "$INSTALL_DIR/.htpasswd" 2>/dev/null || true
   success ".htpasswd généré (utilisateur : $DESK_AUTH_USER)"
 else
   warn "openssl introuvable — .htpasswd non généré ; l'auth du bureau bloquera l'accès tant qu'il manque."
