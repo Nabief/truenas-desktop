@@ -39,7 +39,7 @@ VM_DIR     = os.environ.get('VM_DIR',  '/mnt/Truenas_Stockage/vms')
 ISO_DIR    = os.environ.get('ISO_DIR', '/mnt/Truenas_Stockage')
 
 # ── Version & mise à jour ─────────────────────────────────────────────────────
-APP_VERSION = '1.3.3'
+APP_VERSION = '1.3.4'
 APP_DIR     = os.environ.get('APP_DIR', '')  # dossier d'install (contient fileops.py, HTML…)
 GITHUB_RAW  = os.environ.get('GITHUB_RAW', 'https://raw.githubusercontent.com/Nabief/truenas-desktop/main').rstrip('/')
 
@@ -384,6 +384,69 @@ def _fetch_text(url, timeout=15):
         return r.read().decode('utf-8', 'replace').strip()
 
 
+def _truenas_ip():
+    """Renvoie l'adresse IP LAN réelle du NAS, indépendante d'un nom de domaine
+    configuré comme hôte SSH. On refuse toute IP publique : mieux vaut retomber
+    sur le nom d'hôte que d'ouvrir une IP WAN. Priorité :
+    IP littérale SSH > proxy_pass de nginx.conf (IP choisie à l'install) >
+    IP privée réellement connectée en SSH > DNS si privée > hôte brut."""
+    import socket as _socket, re as _re, os as _os
+
+    def _is_ip(x):
+        return bool(_re.match(r'^\d{1,3}(\.\d{1,3}){3}$', str(x or '')))
+
+    def _is_private(x):
+        m = _re.match(r'^(\d+)\.(\d+)\.(\d+)\.\d+$', str(x or ''))
+        if not m:
+            return False
+        a, b = int(m.group(1)), int(m.group(2))
+        return a == 10 or (a == 172 and 16 <= b <= 31) or (a == 192 and b == 168) or a == 127
+
+    host = (SSH_HOST or '').strip()
+    if _is_ip(host):
+        return host
+
+    # 1) IP littérale du proxy_pass de nginx.conf (celle choisie à l'installation).
+    try:
+        base = os.environ.get('APP_DIR', '') or (APP_DIR or '')
+        conf = _os.path.join(base, 'nginx.conf') if base else ''
+        if conf and _os.path.isfile(conf):
+            txt = open(conf, 'r', encoding='utf-8', errors='replace').read()
+            m = _re.search(r'proxy_pass\s+https?://(\d{1,3}(?:\.\d{1,3}){3})', txt)
+            if m:
+                return m.group(1)
+    except Exception:
+        pass
+
+    # 2) IP privée réellement jointe par le sidecar en SSH.
+    try:
+        with _ssh_lock:
+            for _c in list(_ssh_pool):
+                try:
+                    _tr = _c.get_transport()
+                    _sock = getattr(_tr, 'sock', None)
+                    if _tr and _tr.is_active() and _sock is not None:
+                        _ip = _sock.getpeername()[0]
+                        if _is_private(_ip):
+                            return str(_ip)
+                except Exception:
+                    pass
+    except Exception:
+        pass
+
+    # 3) résolution DNS, seulement si le résultat est une IP privée (LAN).
+    try:
+        _socket.setdefaulttimeout(3)
+        _r = _socket.gethostbyname(host)
+        if _is_private(_r):
+            return _r
+    except Exception:
+        pass
+
+    # 4) repli : le nom d'hôte tel quel (jamais d'IP publique).
+    return host
+
+
 def _version_status():
     latest = ''
     try:
@@ -401,7 +464,7 @@ def _version_status():
         except Exception:
             upd = (latest != APP_VERSION)
     return {'version': APP_VERSION, 'latest': latest, 'update_available': bool(upd),
-            'truenas_host': SSH_HOST}
+            'truenas_host': SSH_HOST, 'truenas_ip': _truenas_ip()}
 
 
 def _do_update():

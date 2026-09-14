@@ -6771,15 +6771,19 @@ document.addEventListener('DOMContentLoaded', () => {
 // URL de l'interface TrueNAS : valeur configurée si explicite, sinon dérivée de
 // l'hôte courant (l'UI TrueNAS est sur le même hôte que le bureau, en HTTPS).
 var _truenasHost = '';
+var _truenasIp = '';
 function truenasUiBase() {
-  // 1) URL explicitement configurée à l'install
+  // 1) IP réelle du NAS remontée par le sidecar — priorité absolue, pour ouvrir
+  //    l'interface par l'IP même quand l'hôte SSH est un nom de domaine.
+  if (_truenasIp && /^\d{1,3}(\.\d{1,3}){3}$/.test(_truenasIp)) return 'https://' + _truenasIp;
+  // 2) URL explicitement configurée à l'install (hors placeholder)
   var c = (typeof TRUENAS_UI === 'string') ? TRUENAS_UI.trim() : '';
   if (c && /^https?:\/\//i.test(c) && c.indexOf('TRUENAS_IP') === -1) {
     return c.replace(/\/+$/, '');
   }
-  // 2) IP réelle du NAS remontée par le sidecar (fiable même en accès par domaine)
+  // 3) hôte remonté par le sidecar (peut être un domaine)
   if (_truenasHost) return 'https://' + _truenasHost;
-  // 3) repli : même hôte que le bureau
+  // 4) repli : même hôte que le bureau
   return 'https://' + location.hostname;
 }
 async function tndLoadConfig() {
@@ -6787,6 +6791,7 @@ async function tndLoadConfig() {
     var v = await fileops('GET', 'version');
     _tndUpdate = v || null;
     if (v && v.truenas_host) _truenasHost = String(v.truenas_host).trim();
+    if (v && v.truenas_ip) _truenasIp = String(v.truenas_ip).trim();
   } catch (e) {}
 }
 function openTrueNASPage(path) {
