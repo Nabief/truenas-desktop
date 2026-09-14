@@ -32,3 +32,6 @@ truenas-desktop.css
 # Divers
 *.bak
 *.tmp
+
+# Scratch (sorties de l'assistant)
+Claude outputs/

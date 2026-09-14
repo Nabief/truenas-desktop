@@ -1,19 +1,12 @@
-# ============================================================
-#  Overlay Authelia (2FA) — à combiner avec le compose principal :
-#     docker compose -f docker-compose.yml -f docker-compose.authelia.yml up -d
-#  Les deux fichiers forment UN seul projet -> même réseau Docker,
-#  donc le conteneur nginx du bureau joint « authelia » par son nom.
-#
-#  Adapte le chemin /mnt/Truenas_Stockage/apps/desktop à ton install.
-# ============================================================
+# Overlay Authelia — à lancer avec :
+#   docker compose -f docker-compose.yml -f docker-compose.authelia.yml up -d
 services:
   authelia:
     image: authelia/authelia:4.39
     container_name: truenas-authelia
     restart: unless-stopped
-    # Port NON publié : joignable uniquement par le nginx du bureau (réseau interne).
-    expose:
-      - "9091"
+    ports:
+      - "9091:9091"           # publié pour que NPM (autre hôte) l'atteigne
     volumes:
       - /mnt/Truenas_Stockage/apps/desktop/authelia:/config
     env_file:

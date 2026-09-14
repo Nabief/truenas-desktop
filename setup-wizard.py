@@ -195,59 +195,36 @@ def run_install(config):
         domain_desktop = (config.get('domain_desktop') or '').strip().lower()
         domain_auth    = (config.get('domain_auth') or '').strip().lower()
         admin_email    = (config.get('admin_email') or 'admin@example.com').strip()
-        if enable_2fa and (not domain_desktop or not domain_auth):
-            emit('⚠ 2FA demandée mais domaines manquants — 2FA désactivée (barrière simple conservée).', 'warn')
+        npm_ip      = (config.get('npm_ip') or '').strip()
+        # ── 2FA : Authelia DERRIÈRE Nginx Proxy Manager (NPM) ──
+        #   Authelia 4.39 exige des URLs HTTPS ; c'est NPM (Let's Encrypt) qui
+        #   les fournit. L'assistant fait TOUT le côté NAS (secrets, hash,
+        #   conteneur Authelia, nginx bureau sans barrière). Il reste à créer
+        #   2 hôtes proxy dans NPM + les redirections DNS (affichés à la fin).
+        #   Les 2 domaines doivent partager le même domaine parent.
+        if enable_2fa and (not domain_desktop or not domain_auth or '.' not in domain_desktop):
+            emit('⚠ 2FA demandée mais domaines manquants/invalides — 2FA désactivée (barrière simple conservée).', 'warn')
             enable_2fa = False
         domain_parent = domain_desktop.split('.', 1)[1] if (enable_2fa and '.' in domain_desktop) else ''
+        if enable_2fa and domain_parent and not domain_auth.endswith(domain_parent):
+            emit('⚠ Les 2 domaines doivent partager le même domaine parent (%s) — 2FA désactivée.' % domain_parent, 'warn')
+            enable_2fa = False
 
         if enable_2fa:
-            _srv_auth = (
-                "    resolver 127.0.0.11 valid=30s ipv6=off;\n"
-                "    auth_request /internal/authelia/authz;\n"
-                "    auth_request_set $user $upstream_http_remote_user;\n"
-                "    auth_request_set $groups $upstream_http_remote_groups;\n"
-                "    auth_request_set $name $upstream_http_remote_name;\n"
-                "    auth_request_set $email $upstream_http_remote_email;\n"
-                "    auth_request_set $redirection_url $upstream_http_location;\n"
-                "    error_page 401 =302 $redirection_url;\n"
-                "    location /internal/authelia/authz {\n"
-                "        internal;\n"
-                "        set $authelia http://authelia:9091/api/authz/auth-request;\n"
-                "        proxy_pass $authelia;\n"
-                "        proxy_set_header X-Original-Method $request_method;\n"
-                "        proxy_set_header X-Original-URL $scheme://$host$request_uri;\n"
-                "        proxy_set_header X-Forwarded-For $remote_addr;\n"
-                "        proxy_set_header Content-Length \"\";\n"
-                "        proxy_pass_request_body off;\n"
-                "        proxy_http_version 1.1;\n"
-                "        proxy_set_header Connection \"\";\n"
-                "    }"
-            )
-            _s_exempt = "auth_request off;"
-            _server_name = domain_desktop
-            _extra_server = (
-                "\n\nserver {\n"
-                "    listen 80;\n"
-                "    server_name " + domain_auth + ";\n"
-                "    location / {\n"
-                "        proxy_pass http://authelia:9091;\n"
-                "        proxy_set_header Host $host;\n"
-                "        proxy_set_header X-Forwarded-Proto $scheme;\n"
-                "        proxy_set_header X-Forwarded-For $remote_addr;\n"
-                "        proxy_http_version 1.1;\n"
-                "        proxy_set_header Upgrade $http_upgrade;\n"
-                "        proxy_set_header Connection \"upgrade\";\n"
-                "        proxy_read_timeout 3600s;\n"
-                "    }\n"
-                "}"
-            )
+            # Bureau nginx SANS barrière locale : NPM + Authelia (en amont)
+            # assurent l'authentification. Authelia est publié sur 9091 pour
+            # que NPM (sur un autre hôte) puisse l'atteindre.
+            _srv_auth = "    # Auth deleguee a NPM + Authelia (2FA) en amont."
+            _s_exempt = ""
+            _server_name = "_"
+            _extra_server = ""
             _authelia_service = (
                 "\n  authelia:\n"
                 "    image: authelia/authelia:4.39\n"
                 "    container_name: truenas-authelia\n"
                 "    restart: unless-stopped\n"
-                "    expose:\n"
-                "      - \"9091\"\n"
+                "    ports:\n"
+                "      - \"9091:9091\"\n"
                 "    volumes:\n"
                 "      - " + install_dir + "/authelia:/config\n"
                 "    env_file:\n"
@@ -645,17 +622,87 @@ GITHUB_RAW={(config.get('github_raw') or GITHUB_RAW_DEFAULT).rstrip('/')}
                 "session:\n  cookies:\n"
                 "    - name: 'authelia_session'\n"
                 "      domain: '%s'\n" % domain_parent +
-                "      authelia_url: 'http://%s:%s'\n" % (domain_auth, port) +
-                "      default_redirection_url: 'http://%s:%s'\n" % (domain_desktop, port) +
+                "      authelia_url: 'https://%s'\n" % domain_auth +
+                "      default_redirection_url: 'https://%s'\n" % domain_desktop +
                 "      expiration: '1h'\n      inactivity: '15m'\n"
                 "storage:\n  local:\n    path: '/config/db.sqlite3'\n"
                 "notifier:\n  filesystem:\n    filename: '/config/notification.txt'\n"
             )
             with open(os.path.join(adir, 'configuration.yml'), 'w') as f:
                 f.write(cfg)
-            emit('✓ Authelia configuré (utilisateur: %s)' % desk_user, 'ok')
-            emit('➤ DNS à créer (réseau local) : %s → %s  et  %s → %s' % (domain_desktop, truenas_ip, domain_auth, truenas_ip), 'step')
-            emit('➤ Enrôlement TOTP après démarrage : lien dans %s/authelia/notification.txt' % install_dir, 'step')
+            # ── Snippets NPM (à monter dans le conteneur NPM sous /snippets) ──
+            npmd = os.path.join(adir, 'npm')
+            os.makedirs(npmd, exist_ok=True)
+            with open(os.path.join(npmd, 'authelia-location.conf'), 'w') as f:
+                f.write(
+                    "## Authelia - endpoint interne d'autorisation (niveau server)\n"
+                    "set $upstream_authelia http://%s:9091/api/authz/auth-request;\n" % truenas_ip +
+                    "location /internal/authelia/authz {\n"
+                    "    internal;\n"
+                    "    proxy_pass $upstream_authelia;\n"
+                    "    proxy_set_header X-Original-Method $request_method;\n"
+                    "    proxy_set_header X-Original-URL $scheme://$http_host$request_uri;\n"
+                    "    proxy_set_header X-Forwarded-For $remote_addr;\n"
+                    "    proxy_set_header Content-Length \"\";\n"
+                    "    proxy_set_header Connection \"\";\n"
+                    "    proxy_pass_request_body off;\n"
+                    "    proxy_next_upstream error timeout invalid_header http_500 http_502 http_503;\n"
+                    "    proxy_redirect http:// $scheme://;\n"
+                    "    proxy_http_version 1.1;\n"
+                    "    proxy_cache_bypass $cookie_session;\n"
+                    "    proxy_no_cache $cookie_session;\n"
+                    "    proxy_buffers 4 32k;\n"
+                    "    client_body_buffer_size 128k;\n"
+                    "    send_timeout 5m;\n"
+                    "    proxy_read_timeout 240;\n"
+                    "    proxy_send_timeout 240;\n"
+                    "    proxy_connect_timeout 240;\n"
+                    "}\n"
+                )
+            with open(os.path.join(npmd, 'authelia-authrequest.conf'), 'w') as f:
+                f.write(
+                    "## Authelia - protege la location (a inclure DANS location /)\n"
+                    "auth_request /internal/authelia/authz;\n"
+                    "auth_request_set $user   $upstream_http_remote_user;\n"
+                    "auth_request_set $groups $upstream_http_remote_groups;\n"
+                    "auth_request_set $name   $upstream_http_remote_name;\n"
+                    "auth_request_set $email  $upstream_http_remote_email;\n"
+                    "proxy_set_header Remote-User   $user;\n"
+                    "proxy_set_header Remote-Groups $groups;\n"
+                    "proxy_set_header Remote-Name   $name;\n"
+                    "proxy_set_header Remote-Email  $email;\n"
+                    "auth_request_set $redirection_url $upstream_http_location;\n"
+                    "error_page 401 =302 $redirection_url;\n"
+                )
+            with open(os.path.join(npmd, 'proxy.conf'), 'w') as f:
+                f.write(
+                    "## En-tetes proxy standard (a inclure DANS location /)\n"
+                    "proxy_set_header Host              $host;\n"
+                    "proxy_set_header X-Real-IP         $remote_addr;\n"
+                    "proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;\n"
+                    "proxy_set_header X-Forwarded-Proto $scheme;\n"
+                    "proxy_set_header X-Forwarded-Host  $http_host;\n"
+                    "proxy_set_header X-Forwarded-Uri   $request_uri;\n"
+                    "proxy_set_header Upgrade           $http_upgrade;\n"
+                    "proxy_set_header Connection        $connection_upgrade;\n"
+                    "proxy_http_version 1.1;\n"
+                    "proxy_read_timeout 3600;\n"
+                    "proxy_send_timeout 3600;\n"
+                    "send_timeout 3600;\n"
+                    "client_max_body_size 20g;\n"
+                )
+            emit('✓ Authelia configuré (utilisateur: %s) — conteneur publié sur le port 9091' % desk_user, 'ok')
+            emit('✓ Snippets NPM écrits dans %s' % npmd, 'ok')
+            _npm = npm_ip or '<IP_de_NPM>'
+            emit('━━━━━ À FAIRE DANS NPM (une seule fois) ━━━━━', 'step')
+            emit("1) Copie le dossier %s sur l'hôte NPM et monte-le dans le conteneur NPM sous /snippets (volume :ro), puis redémarre NPM." % npmd, 'step')
+            emit("2) Hôte proxy PORTAIL : %s  →  http  %s  port 9091 — SSL Let's Encrypt + Force SSL + Websockets. Rien dans Advanced." % (domain_auth, truenas_ip), 'step')
+            emit("3) Hôte proxy BUREAU : %s  →  http  %s  port %s — SSL + Force SSL + Websockets. Onglet Advanced :" % (domain_desktop, truenas_ip, port), 'step')
+            emit("      include /snippets/authelia-location.conf;", 'step')
+            emit("      location / { include /snippets/proxy.conf; include /snippets/authelia-authrequest.conf; proxy_pass $forward_scheme://$server:$port; }", 'step')
+            emit('━━━━━ DNS (AdGuard) — pointer les 2 domaines vers NPM ━━━━━', 'step')
+            emit("   %s  →  %s      %s  →  %s" % (domain_desktop, _npm, domain_auth, _npm), 'step')
+            emit("➤ Enrôlement TOTP : ouvre https://%s , connecte-toi (%s), scanne le QR — lien aussi dans %s/authelia/notification.txt" % (domain_desktop, desk_user, install_dir), 'step')
 
         # ── 7. Configuration host TrueNAS ─────────────────────
         host_script = os.path.join(install_dir, 'setup-truenas-host.sh')
@@ -965,7 +1012,12 @@ HTML = """<!DOCTYPE html>
           <label>E-mail administrateur</label>
           <input id="admin_email" placeholder="admin@exemple.fr" />
         </div>
-        <div class="hint">Prérequis : crée ces 2 domaines dans ton DNS local (→ IP du NAS). L'enrôlement TOTP se fait après l'installation.</div>
+        <div class="form-group">
+          <label>IP de Nginx Proxy Manager (NPM)</label>
+          <input id="npm_ip" placeholder="192.168.0.254" />
+          <div class="hint">Le HTTPS de la 2FA passe par NPM. Les 2 domaines pointeront vers cette IP.</div>
+        </div>
+        <div class="hint">L'assistant configure tout le côté NAS. Il reste ensuite à créer 2 hôtes proxy dans NPM + les redirections DNS vers l'IP de NPM — l'assistant affiche les valeurs exactes à la fin. L'enrôlement TOTP se fait après l'installation.</div>
       </div>
 
       <div class="actions">
@@ -1133,6 +1185,7 @@ function startInstall() {
     domain_desktop: document.getElementById('domain_desktop').value.trim(),
     domain_auth:    document.getElementById('domain_auth').value.trim(),
     admin_email:    document.getElementById('admin_email').value.trim(),
+    npm_ip:         document.getElementById('npm_ip').value.trim(),
   };
 
   goTo(3);

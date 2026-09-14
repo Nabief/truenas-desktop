@@ -1,53 +1,36 @@
 # ============================================================
-#  Authelia — 2FA devant le TrueNAS Desktop
-#  Version cible : 4.39.x (image épinglée dans docker-compose.authelia.yml)
-#
-#  Les SECRETS (session, storage, jwt) ne sont PAS ici : ils sont fournis
-#  par variables d'environnement AUTHELIA_* via authelia/secrets.env.
-#
-#  Remplace partout example.com / desktop.example.com / auth.example.com
-#  par TES domaines (ex. goassistance.fr / desktop.goassistance.fr / auth.goassistance.fr).
+#  Authelia — 2FA derrière Nginx Proxy Manager (HTTPS)
+#  Version cible : 4.39.x
+#  Les secrets viennent de authelia/secrets.env (AUTHELIA_*).
+#  Remplace goassistance.fr / desktop. / auth. par tes domaines.
 # ============================================================
-
 theme: 'dark'
-
 log:
   level: 'info'
-
 server:
   address: 'tcp://:9091'
-
 totp:
   issuer: 'TrueNAS Desktop'
   period: 30
-
-# Base d'utilisateurs dans un fichier (pas de LDAP à gérer).
 authentication_backend:
   file:
     path: '/config/users_database.yml'
-
-# Politique d'accès : tout est refusé par défaut, 2FA obligatoire pour le bureau.
 access_control:
   default_policy: 'deny'
   rules:
-    - domain: 'desktop.example.com'      # ← domaine du bureau
+    - domain: 'desktop.goassistance.fr'
       policy: 'two_factor'
-
 session:
   cookies:
     - name: 'authelia_session'
-      domain: 'example.com'                          # ← domaine PARENT (couvre desktop + auth)
-      authelia_url: 'http://auth.example.com:8099'   # ← URL publique du portail (voir nginx)
-      default_redirection_url: 'http://desktop.example.com:8099'
+      domain: 'goassistance.fr'
+      authelia_url: 'https://auth.goassistance.fr'
+      default_redirection_url: 'https://desktop.goassistance.fr'
       expiration: '1h'
       inactivity: '15m'
-
 storage:
   local:
     path: '/config/db.sqlite3'
-
-# Les liens d'enrôlement 2FA (QR code TOTP) sont écrits dans ce fichier :
-# pas besoin de serveur mail. Pour de l'e-mail, remplace par un bloc 'smtp:'.
 notifier:
   filesystem:
     filename: '/config/notification.txt'
