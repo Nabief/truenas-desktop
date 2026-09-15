@@ -7,6 +7,11 @@
 Remplace `exemple.fr`, `192.168.1.10` (NAS) et `192.168.1.2` (NPM) par tes valeurs.
 Les deux sous-domaines doivent partager le meme domaine parent.
 
+> **Recommande : NPMplus** (un fork de Nginx Proxy Manager). Il **integre nativement Authelia**
+> (menu « Auth Request » -> « authelia (modern) »), ce qui evite de monter des snippets dans le
+> conteneur NPM et rend la mise en place bien plus simple que NPM standard. Depot :
+> https://github.com/ZoeyVid/NPMplus
+
 ## Principe
 
 Navigateur -> **NPM (HTTPS Let's Encrypt)** -> { portail Authelia | bureau }. NPM exige
@@ -44,10 +49,11 @@ SSL Let's Encrypt + Force SSL + Websockets ; rien dans Advanced.
 **Bureau** `desktop.exemple.fr` -> Forward **http** `192.168.1.10` port **8099** ;
 SSL + Force SSL + Websockets ; plus l'authentification Authelia :
 
-- **NPMplus (simple)** : Auth Request = **`authelia (modern)`**, Auth Request Upstream =
-  **`http://192.168.1.10:9091`** (schema + hote + port, **sans** chemin).
-- **NPM classique (snippets)** : monte `authelia/npm/` dans le conteneur NPM sous `/snippets`,
-  puis onglet Advanced :
+- **NPMplus — RECOMMANDE** : dans l'hote proxy du bureau, Auth Request = **`authelia (modern)`**,
+  Auth Request Upstream = **`http://192.168.1.10:9091`** (schema + hote + port, **sans** chemin).
+  Rien d'autre a monter cote NPM.
+- **NPM standard (sans integration Authelia)** : monte `authelia/npm/` dans le conteneur NPM sous
+  `/snippets`, puis onglet Advanced :
   ```
   include /snippets/authelia-location.conf;
   location / { include /snippets/proxy.conf; include /snippets/authelia-authrequest.conf; proxy_pass $forward_scheme://$server:$port; }
