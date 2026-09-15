@@ -1147,7 +1147,7 @@ HTML = """<!DOCTYPE html>
         <input id="desk_pass" type="password" placeholder="Laissez vide pour générer" />
       </div>
       <div class="form-group">
-        <label><input type="checkbox" id="enable_2fa" onchange="document.getElementById('twofa').hidden=!this.checked" style="width:auto;margin-right:8px;vertical-align:middle;" />Activer la double authentification (2FA / Authelia)</label>
+        <label><input type="checkbox" id="enable_2fa" onchange="document.getElementById('twofa').hidden=!this.checked;updateInstallBtn()" style="width:auto;margin-right:8px;vertical-align:middle;" />Activer la double authentification (2FA / Authelia)</label>
         <div class="hint">Ajoute un code TOTP. Nécessite 2 domaines locaux (ci-dessous).</div>
       </div>
       <div id="twofa" hidden>
@@ -1172,28 +1172,33 @@ HTML = """<!DOCTYPE html>
         <div class="form-row">
           <div class="form-group">
             <label>Serveur SMTP</label>
-            <input id="smtp_host" placeholder="mail.exemple.fr" />
+            <input id="smtp_host" placeholder="mail.exemple.fr" oninput="smtpChanged()" />
           </div>
           <div class="form-group">
             <label>Port</label>
-            <input id="smtp_port" value="465" placeholder="465" />
+            <input id="smtp_port" value="465" placeholder="465" oninput="smtpChanged()" />
           </div>
         </div>
         <div class="form-group">
           <label>Identifiant SMTP (adresse d'envoi)</label>
-          <input id="smtp_user" placeholder="noreply@exemple.fr" />
+          <input id="smtp_user" placeholder="noreply@exemple.fr" oninput="smtpChanged()" />
         </div>
         <div class="form-group">
           <label>Mot de passe SMTP</label>
-          <input id="smtp_pass" type="password" placeholder="Laisse vide pour envoyer les codes dans un fichier local" />
+          <input id="smtp_pass" type="password" placeholder="Laisse vide pour envoyer les codes dans un fichier local" oninput="smtpChanged()" />
           <div class="hint">Si rempli : Authelia envoie les codes par email (port 465 = SSL, 587 = STARTTLS). Si vide : les codes sont écrits dans authelia/notification.txt.</div>
+        </div>
+        <div class="form-group">
+          <button type="button" class="btn btn-secondary" id="btn-smtp-test" onclick="testSmtp()" style="width:100%;justify-content:center;">Tester le SMTP</button>
+          <div id="smtp-status" class="hint" style="margin-top:6px;"></div>
+          <div class="hint">Si tu remplis le mot de passe SMTP, le test doit réussir avant de pouvoir installer (sinon l'enrôlement 2FA par email serait impossible). Laisse-le vide pour utiliser le fichier local.</div>
         </div>
         <div class="hint">L'assistant configure tout le côté NAS. Il reste ensuite à créer 2 hôtes proxy dans NPM + les redirections DNS vers l'IP de NPM — l'assistant affiche les valeurs exactes à la fin. L'enrôlement TOTP se fait après l'installation.</div>
       </div>
 
       <div class="actions">
         <button class="btn btn-secondary" onclick="goTo(1)">← Retour</button>
-        <button class="btn btn-primary"   onclick="startInstall()">Installer →</button>
+        <button class="btn btn-primary" id="btn-install" onclick="startInstall()">Installer →</button>
       </div>
     </div>
 
@@ -1245,6 +1250,56 @@ function goTo(n) {
   currentPage = n;
   document.getElementById('page' + n).hidden = false;
   document.getElementById('s'    + n).classList.add('active');
+  if (n === 2) updateInstallBtn();
+}
+
+// ── Vérification SMTP avant install (2FA par email) ───────────
+var smtpState = 'untested';
+function _v(id){ var e = document.getElementById(id); return e ? e.value.trim() : ''; }
+function smtpUsesEmail(){
+  return !!(_v('smtp_host') && _v('smtp_user') && document.getElementById('smtp_pass').value);
+}
+function smtpChanged(){
+  smtpState = 'untested';
+  var s = document.getElementById('smtp-status');
+  if (s){ s.textContent = ''; s.style.color = ''; }
+  updateInstallBtn();
+}
+function updateInstallBtn(){
+  var btn = document.getElementById('btn-install');
+  if (!btn) return;
+  var twofa = document.getElementById('enable_2fa').checked;
+  var block = twofa && smtpUsesEmail() && smtpState !== 'ok';
+  btn.disabled = block;
+  btn.style.opacity = block ? '0.5' : '';
+  btn.style.cursor  = block ? 'not-allowed' : '';
+  btn.title = block ? 'Teste le SMTP (il doit réussir), ou laisse le mot de passe SMTP vide.' : '';
+}
+async function testSmtp(){
+  var btn = document.getElementById('btn-smtp-test');
+  var s   = document.getElementById('smtp-status');
+  var host = _v('smtp_host'), port = _v('smtp_port') || '465', user = _v('smtp_user');
+  var pass = document.getElementById('smtp_pass').value;
+  if (!host || !user || !pass){
+    s.textContent = 'Renseigne serveur, identifiant et mot de passe SMTP.';
+    s.style.color = '#f0b429';
+    return;
+  }
+  btn.disabled = true; var old = btn.textContent; btn.textContent = 'Test en cours…';
+  s.textContent = ''; s.style.color = '';
+  try {
+    var r = await fetch('/smtp-test', { method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ host: host, port: port, user: user, pass: pass }) });
+    var j = await r.json();
+    if (j.ok){ smtpState = 'ok';
+      s.textContent = '✓ Connexion SMTP réussie (authentification OK).'; s.style.color = '#3ecf8e'; }
+    else { smtpState = 'fail';
+      s.textContent = '✗ Échec SMTP : ' + (j.error || 'inconnu'); s.style.color = '#ff6b6b'; }
+  } catch(e){ smtpState = 'fail';
+    s.textContent = '✗ Échec SMTP : ' + e; s.style.color = '#ff6b6b'; }
+  btn.disabled = false; btn.textContent = old;
+  updateInstallBtn();
 }
 
 // ── Navigateur de dossiers ────────────────────────────────────
@@ -1340,6 +1395,10 @@ function startInstall() {
   const pass = document.getElementById('ssh_pass').value.trim();
   if (!ip)   { alert('IP TrueNAS obligatoire'); return; }
   if (!pass) { alert('Mot de passe SSH obligatoire'); return; }
+  if (document.getElementById('enable_2fa').checked && smtpUsesEmail() && smtpState !== 'ok') {
+    alert('Teste d\'abord le SMTP (il doit réussir), ou laisse le mot de passe SMTP vide pour utiliser le fichier local.');
+    return;
+  }
 
   const config = {
     install_dir:  document.getElementById('install_dir').value.trim(),
@@ -1404,6 +1463,38 @@ function startInstall() {
 
 
 # ── Serveur HTTP ──────────────────────────────────────────────
+def _smtp_test(host, port, user, password):
+    """Teste la connexion + authentification SMTP telle qu'Authelia l'utilisera
+    (465 = SSL implicite, sinon STARTTLS). Retourne {'ok': bool, 'error': str}."""
+    import smtplib, ssl
+    host = (host or '').strip()
+    user = (user or '').strip()
+    password = password or ''
+    try:
+        port = int(str(port or '465').strip())
+    except Exception:
+        port = 465
+    if not host or not user or not password:
+        return {'ok': False, 'error': 'Renseigne serveur, identifiant et mot de passe SMTP.'}
+    try:
+        ctx = ssl.create_default_context()
+        if port == 465:
+            with smtplib.SMTP_SSL(host, port, timeout=15, context=ctx) as s:
+                s.login(user, password)
+        else:
+            with smtplib.SMTP(host, port, timeout=15) as s:
+                s.ehlo()
+                try:
+                    s.starttls(context=ctx)
+                    s.ehlo()
+                except smtplib.SMTPException:
+                    pass  # certains serveurs 587 acceptent sans STARTTLS
+                s.login(user, password)
+        return {'ok': True, 'error': ''}
+    except Exception as e:
+        return {'ok': False, 'error': str(e)}
+
+
 class WizardHandler(http.server.BaseHTTPRequestHandler):
 
     def log_message(self, format, *args):
@@ -1452,6 +1543,14 @@ class WizardHandler(http.server.BaseHTTPRequestHandler):
             self.send_response(200)
             self.end_headers()
             self.wfile.write(b'ok')
+        elif self.path == '/smtp-test':
+            length = int(self.headers.get('Content-Length', 0))
+            try:
+                cfg = json.loads(self.rfile.read(length) or b'{}')
+            except Exception:
+                cfg = {}
+            self._json(_smtp_test(cfg.get('host'), cfg.get('port'),
+                                  cfg.get('user'), cfg.get('pass')))
         else:
             self.send_error(404)
 
