@@ -76,10 +76,6 @@ L'installation se fait via un **assistant web** (formulaire) : une seule command
   page et les endpoints fileops/terminal/VNC ; `.htpasswd` généré à l'install). L'assistant active aussi l'auth SSH
   par mot de passe et le sudo NOPASSWD ; une **clé SSH dédiée** + désactivation du mot de
   passe SSH durcissent davantage. Détails et activation sur install existante : `SECURITE.md`.
-- **TrueNAS 25.04+ (Fangtooth)** : la virtualisation est passée de libvirt/KVM à
-  **Incus**. Sur ces versions, le module VMs (basé sur virsh/libvirt) ne fonctionne
-  pas en l'état ; le reste du bureau (fichiers, Docker, sites, téléchargements)
-  fonctionne.
 - **Mise à jour** : pousser les nouveaux fichiers sur le dépôt, puis relancer
   l'assistant (idempotent) ou recréer les conteneurs.
 
