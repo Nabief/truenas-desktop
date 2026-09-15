@@ -1149,6 +1149,7 @@ HTML = """<!DOCTYPE html>
       <div class="log" id="log"></div>
       <div class="actions" style="margin-top:16px;">
         <button class="btn btn-secondary" id="btn-cancel" onclick="window.close()">Fermer</button>
+        <button class="btn btn-primary" id="btn-finish" hidden onclick="goTo(4)">Continuer →</button>
       </div>
     </div>
 
@@ -1327,7 +1328,12 @@ function startInstall() {
       es.close();
       const addr = data.msg.replace('__DONE__', '');
       document.getElementById('open-link').href = 'http://' + addr;
-      goTo(4);
+      const done = document.createElement('div');
+      done.className = 'ok';
+      done.textContent = '✅ Installation terminée — vérifie le journal ci-dessus, puis clique « Continuer ».';
+      log.appendChild(done);
+      log.scrollTop = log.scrollHeight;
+      document.getElementById('btn-finish').hidden = false;
       return;
     }
     const cls = data.level === 'step' ? 'step' : data.level;
