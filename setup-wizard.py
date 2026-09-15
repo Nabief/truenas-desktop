@@ -570,18 +570,38 @@ GITHUB_RAW={(config.get('github_raw') or GITHUB_RAW_DEFAULT).rstrip('/')}
 
         # ── .htpasswd (barrière d'auth du bureau) ──────────────
         emit('▸ Génération de .htpasswd (barrière d\'auth)...', 'step')
+        _htpasswd_ok = False
+        _htp = os.path.join(install_dir, '.htpasswd')
         try:
             _h = subprocess.check_output(['openssl', 'passwd', '-apr1', desk_pass]).decode().strip()
-            _htp = os.path.join(install_dir, '.htpasswd')
+            if not _h:
+                raise RuntimeError('openssl a renvoyé un hash vide')
             with open(_htp, 'w') as f:
                 f.write('%s:%s\n' % (desk_user, _h))
             try:
                 os.chmod(_htp, 0o600)
             except OSError:
                 pass  # chmod refusé sur ZFS (ACL) — non bloquant
+            _htpasswd_ok = os.path.getsize(_htp) > 0
             emit('✓ Accès bureau — utilisateur: %s  mot de passe: %s' % (desk_user, desk_pass), 'ok')
         except Exception as e:
-            emit('⚠ .htpasswd non généré: %s — barrière inactive, à refaire à la main' % e, 'warn')
+            emit('⚠ .htpasswd non généré: %s' % e, 'warn')
+
+        # Filet de sécurité : barrière simple demandée mais .htpasswd absent.
+        # On RETIRE la barrière du nginx.conf déjà écrit, sinon nginx renvoie
+        # un 500 (fichier d'auth introuvable) et le bureau est inaccessible.
+        if not enable_2fa and not _htpasswd_ok:
+            try:
+                _np = os.path.join(install_dir, 'nginx.conf')
+                _nc = open(_np).read()
+                _nc = _nc.replace(_srv_auth, "    # Barriere login desactivee : .htpasswd non genere (voir SECURITE.md)")
+                with open(_np, 'w') as f:
+                    f.write(_nc)
+            except Exception:
+                pass
+            emit('⚠ BARRIÈRE LOGIN NON POSÉE : le bureau sera accessible SANS mot de passe. '
+                 'Génère le .htpasswd à la main (openssl passwd -apr1) dans %s, remets auth_basic '
+                 'dans nginx.conf, puis « docker restart truenas-desktop » — voir SECURITE.md.' % install_dir, 'warn')
 
         # ── Authelia (2FA) : secrets + hash + fichiers de config ──
         if enable_2fa:
