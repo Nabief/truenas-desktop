@@ -288,6 +288,18 @@ GITHUB_RAW={(config.get('github_raw') or GITHUB_RAW_DEFAULT).rstrip('/')}
 
         # ── 3. Récupération des fichiers (GitHub, sinon copie locale) ──
         emit('▸ Récupération des fichiers applicatifs...', 'step')
+        # Un démarrage Docker précédent (avant que les fichiers existent) a pu
+        # créer des DOSSIERS à la place des fichiers montés (bind-mount) → l'écriture
+        # échouerait ensuite avec « Is a directory ». On retire ces dossiers parasites.
+        for _bad in ('truenas-desktop.html', 'vnc-viewer.html', 'fileops.py',
+                     'nginx.conf', '.htpasswd', 'docker-compose.yml'):
+            _bp = os.path.join(install_dir, _bad)
+            if os.path.isdir(_bp):
+                try:
+                    shutil.rmtree(_bp)
+                    emit('⚠ %s était un dossier (mount Docker d\'un essai précédent) — supprimé.' % _bad, 'warn')
+                except Exception as _e:
+                    emit('⚠ Impossible de supprimer le dossier parasite %s : %s' % (_bad, _e), 'warn')
         github_raw = (config.get('github_raw') or GITHUB_RAW_DEFAULT).rstrip('/')
         import urllib.request as _u
         for fname in ['fileops.py', 'truenas-desktop.html', 'vnc-viewer.html']:
