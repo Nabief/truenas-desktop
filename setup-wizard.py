@@ -1011,6 +1011,18 @@ HTML = """<!DOCTYPE html>
               margin-right: 8px; vertical-align: middle; }
   @keyframes spin { to { transform: rotate(360deg); } }
 
+  /* Pilule / interrupteur (toggle) */
+  .switch { display: flex; align-items: center; gap: 10px; cursor: pointer; user-select: none; }
+  .switch input { position: absolute; opacity: 0; width: 0; height: 0; }
+  .switch .slider { width: 42px; height: 23px; background: var(--surface2); border: 1px solid var(--border);
+                    border-radius: 999px; position: relative; transition: .2s; flex-shrink: 0; }
+  .switch .slider::before { content: ''; position: absolute; width: 17px; height: 17px; border-radius: 50%;
+                    background: var(--dim); top: 2px; left: 2px; transition: .2s; }
+  .switch input:checked + .slider { background: var(--accent); border-color: var(--accent); }
+  .switch input:checked + .slider::before { transform: translateX(19px); background: #fff; }
+  .switch input:focus-visible + .slider { box-shadow: 0 0 0 3px rgba(91,127,255,.35); }
+  .switch-label { font-size: 13px; color: var(--text); font-weight: 500; }
+
   [hidden] { display: none !important; }
 
   /* Input avec bouton picker */
@@ -1048,7 +1060,7 @@ HTML = """<!DOCTYPE html>
 <body>
 <div class="card">
   <div class="header">
-    <div class="logo">🖥️</div>
+    <div class="logo"><svg width="54" height="54" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" style="display:block;margin:0 auto;"><defs><linearGradient id="tndg" x1="3" y1="3" x2="21" y2="18" gradientUnits="userSpaceOnUse"><stop stop-color="#8fa9ff"/><stop offset="1" stop-color="#5b7fff"/></linearGradient></defs><rect x="2.4" y="3.4" width="19.2" height="13.2" rx="2.4" stroke="url(#tndg)" stroke-width="1.6"/><path d="M8 20.6h8M12 16.6v4" stroke="url(#tndg)" stroke-width="1.6" stroke-linecap="round"/><circle cx="6.4" cy="7.4" r="1.05" fill="#4caf87"/><path d="M9.6 7.4h8.2" stroke="#8fa9ff" stroke-width="1.4" stroke-linecap="round" opacity="0.85"/><path d="M5.4 10.6h13" stroke="#5b7fff" stroke-width="1.3" stroke-linecap="round" opacity="0.5"/><path d="M5.4 13.2h9" stroke="#5b7fff" stroke-width="1.3" stroke-linecap="round" opacity="0.35"/></svg></div>
     <h1>TrueNAS Desktop</h1>
     <p>Assistant d'installation</p>
   </div>
@@ -1147,7 +1159,7 @@ HTML = """<!DOCTYPE html>
         <input id="desk_pass" type="password" placeholder="Laissez vide pour générer" />
       </div>
       <div class="form-group">
-        <label><input type="checkbox" id="enable_2fa" onchange="document.getElementById('twofa').hidden=!this.checked;updateInstallBtn()" style="width:auto;margin-right:8px;vertical-align:middle;" />Activer la double authentification (2FA / Authelia)</label>
+        <label class="switch"><input type="checkbox" id="enable_2fa" onchange="document.getElementById('twofa').hidden=!this.checked;updateInstallBtn()" /><span class="slider"></span><span class="switch-label">Activer la double authentification (2FA / Authelia)</span></label>
         <div class="hint">Ajoute un code TOTP. Nécessite 2 domaines locaux (ci-dessous).</div>
       </div>
       <div id="twofa" hidden>
@@ -1169,7 +1181,7 @@ HTML = """<!DOCTYPE html>
           <div class="hint">Le HTTPS de la 2FA passe par NPM. Les 2 domaines pointeront vers cette IP.</div>
         </div>
         <div class="form-group" style="margin-top:10px;">
-          <label><input type="checkbox" id="enable_email" onchange="document.getElementById('emailfields').hidden=!this.checked;updateInstallBtn()" style="width:auto;margin-right:8px;vertical-align:middle;" />Envoyer les codes 2FA par email (SMTP)</label>
+          <label class="switch"><input type="checkbox" id="enable_email" onchange="document.getElementById('emailfields').hidden=!this.checked;updateInstallBtn()" /><span class="slider"></span><span class="switch-label">Envoyer les codes 2FA par email (SMTP)</span></label>
           <div class="hint">Décoché : les codes 2FA sont écrits dans un fichier local (authelia/notification.txt) — le plus simple. Coché : renseigne et teste le SMTP ci-dessous.</div>
         </div>
         <div id="emailfields" hidden>
@@ -1271,7 +1283,20 @@ function smtpChanged(){
   if (s){ s.textContent = ''; s.style.color = ''; }
   updateInstallBtn();
 }
+function styleSmtpBtn(){
+  var b = document.getElementById('btn-smtp-test');
+  if (!b) return;
+  var has = !!(_v('smtp_host') || _v('smtp_user') || document.getElementById('smtp_pass').value);
+  if (smtpState === 'ok'){
+    b.style.background = 'rgba(76,175,135,.18)'; b.style.borderColor = 'var(--success)'; b.style.color = 'var(--success)';
+  } else if (has){
+    b.style.background = 'rgba(240,165,0,.18)'; b.style.borderColor = 'var(--warn)'; b.style.color = 'var(--warn)';
+  } else {
+    b.style.background = ''; b.style.borderColor = ''; b.style.color = '';
+  }
+}
 function updateInstallBtn(){
+  styleSmtpBtn();
   var btn = document.getElementById('btn-install');
   if (!btn) return;
   var twofa = document.getElementById('enable_2fa').checked;
@@ -1350,6 +1375,9 @@ function browseTo(path) {
         div.onclick = () => browseTo(e.path);
         list.appendChild(div);
       });
+    })
+    .catch(function(err){
+      list.innerHTML = '<div style="padding:20px;color:var(--error);text-align:center">Erreur : ' + err + '</div>';
     });
 }
 
@@ -1610,7 +1638,7 @@ class WizardHandler(http.server.BaseHTTPRequestHandler):
 # ── Main ──────────────────────────────────────────────────────
 if __name__ == '__main__':
     ip = get_local_ip()
-    server = http.server.HTTPServer(('0.0.0.0', PORT), WizardHandler)
+    server = http.server.ThreadingHTTPServer(('0.0.0.0', PORT), WizardHandler)
     print()
     print('╔══════════════════════════════════════════╗')
     print('║      TrueNAS Desktop  —  Wizard          ║')
