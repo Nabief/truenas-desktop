@@ -2,7 +2,7 @@
 #  Authelia — 2FA derrière Nginx Proxy Manager (HTTPS)
 #  Version cible : 4.39.x
 #  Les secrets viennent de authelia/secrets.env (AUTHELIA_*).
-#  Remplace goassistance.fr / desktop. / auth. par tes domaines.
+#  Remplace exemple.fr / desktop. / auth. par tes domaines.
 # ============================================================
 theme: 'dark'
 log:
@@ -18,14 +18,14 @@ authentication_backend:
 access_control:
   default_policy: 'deny'
   rules:
-    - domain: 'desktop.goassistance.fr'
+    - domain: 'desktop.exemple.fr'
       policy: 'two_factor'
 session:
   cookies:
     - name: 'authelia_session'
-      domain: 'goassistance.fr'
-      authelia_url: 'https://auth.goassistance.fr'
-      default_redirection_url: 'https://desktop.goassistance.fr'
+      domain: 'exemple.fr'
+      authelia_url: 'https://auth.exemple.fr'
+      default_redirection_url: 'https://desktop.exemple.fr'
       expiration: '1h'
       inactivity: '15m'
 storage:

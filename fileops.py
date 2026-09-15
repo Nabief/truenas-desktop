@@ -31,7 +31,7 @@ TOKEN      = os.environ.get('FILEOPS_TOKEN',    'changeme-secret-token')
 PORT       = int(os.environ.get('FILEOPS_PORT',    '8765'))
 WS_PORT    = int(os.environ.get('FILEOPS_WS_PORT', '8766'))
 
-SSH_HOST   = os.environ.get('TRUENAS_SSH_HOST', '192.168.0.200')
+SSH_HOST   = os.environ.get('TRUENAS_SSH_HOST', '192.168.1.10')
 SSH_USER   = os.environ.get('TRUENAS_SSH_USER', 'truenas_admin')
 SSH_PASS   = os.environ.get('TRUENAS_SSH_PASS', '')
 SSH_PORT_N = int(os.environ.get('TRUENAS_SSH_PORT', '22'))

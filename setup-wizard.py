@@ -1051,7 +1051,7 @@ HTML = """<!DOCTYPE html>
         </div>
         <div class="form-group">
           <label>IP de Nginx Proxy Manager (NPM)</label>
-          <input id="npm_ip" placeholder="192.168.0.254" />
+          <input id="npm_ip" placeholder="192.168.1.2" />
           <div class="hint">Le HTTPS de la 2FA passe par NPM. Les 2 domaines pointeront vers cette IP.</div>
         </div>
         <div class="section-title" style="font-size:0.95em;">✉️ Email (optionnel — pour envoyer les codes par mail)</div>

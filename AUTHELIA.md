@@ -1,160 +1,104 @@
-# 2FA avec Authelia — **derrière Nginx Proxy Manager (NPM)**
+# 2FA Authelia derriere Nginx Proxy Manager (NPM)
 
-> ⚠️ **Méthode à jour.** L'ancienne approche « Authelia intégré au nginx du bureau
-> en HTTP » ne fonctionne pas : **Authelia 4.39 exige des URLs en HTTPS**. Comme NPM
-> fournit déjà du HTTPS (Let's Encrypt), on met **Authelia derrière NPM**. La case
-> « 2FA » de l'assistant (`setup-wizard.py`) génère l'ancienne approche et **ne doit
-> pas être utilisée** ; fais une install **sans** 2FA, puis suis ce guide.
+> Memo de reference. L'assistant d'installation (`setup-wizard.py`) fait tout le cote
+> NAS automatiquement quand tu coches « Activer la 2FA ». Ce document decrit la
+> methode complete, les etapes manuelles (NPM + DNS + email) et surtout les pieges.
 
-Topologie : navigateur → **NPM (HTTPS)** → { portail Authelia | bureau }. NPM
-demande le login + code TOTP (via Authelia) avant de laisser passer vers le bureau.
+Remplace `exemple.fr`, `192.168.1.10` (NAS) et `192.168.1.2` (NPM) par tes valeurs.
+Les deux sous-domaines doivent partager le meme domaine parent.
 
-- Bureau : `https://desktop.goassistance.fr`  (NPM → `NAS:8099`)
-- Portail : `https://auth.goassistance.fr`     (NPM → `NAS:9091`)
+## Principe
 
-Remplace `goassistance.fr`, `192.168.0.200` (NAS) et `192.168.0.254` (NPM) par tes valeurs.
+Navigateur -> **NPM (HTTPS Let's Encrypt)** -> { portail Authelia | bureau }. NPM exige
+login + code TOTP (via Authelia) avant de laisser passer vers le bureau. Authelia 4.39
+**exige des URLs HTTPS** : c'est NPM qui les fournit.
 
----
+- Bureau  : `https://desktop.exemple.fr`  ->  NPM  ->  `NAS:8099`
+- Portail : `https://auth.exemple.fr`      ->  NPM  ->  `NAS:9091`
 
-## 1. Fichiers Authelia sur le NAS
+## 1. Cote NAS — fait par l'assistant
+
+En cochant « 2FA », l'assistant cree `authelia/` avec : `secrets.env` (secrets aleatoires,
+**preserves** aux reinstallations), `users_database.yml` (utilisateur + hash argon2 du mot de
+passe), `configuration.yml` (HTTPS), le conteneur `truenas-authelia` publie sur le port
+**9091**, et le nginx du bureau **sans barriere locale** (NPM+Authelia protegent en amont).
+Fichiers d'exemple : voir `authelia/`.
+
+## 2. Demarrer / recharger Authelia
 
 ```bash
-cd /mnt/Truenas_Stockage/apps/desktop
-mkdir -p authelia
+cd /mnt/<pool>/apps/desktop
+docker compose up -d --force-recreate authelia
+docker logs --tail 10 truenas-authelia    # doit dire "Startup complete" + "Listening ... :9091"
 ```
 
-**Secrets** (`authelia/secrets.env`) — 3 valeurs aléatoires :
+> **Piege n1 :** un simple `docker restart` **ne recharge PAS** `secrets.env` (Docker ne lit
+> `env_file` qu'a la creation du conteneur). Apres toute modif des secrets ou du mot de passe
+> SMTP, utilise **`up -d --force-recreate`**, jamais `restart`.
+
+## 3. NPM — deux hotes proxy
+
+**Portail** `auth.exemple.fr` -> Forward **http** `192.168.1.10` port **9091** ;
+SSL Let's Encrypt + Force SSL + Websockets ; rien dans Advanced.
+
+**Bureau** `desktop.exemple.fr` -> Forward **http** `192.168.1.10` port **8099** ;
+SSL + Force SSL + Websockets ; plus l'authentification Authelia :
+
+- **NPMplus (simple)** : Auth Request = **`authelia (modern)`**, Auth Request Upstream =
+  **`http://192.168.1.10:9091`** (schema + hote + port, **sans** chemin).
+- **NPM classique (snippets)** : monte `authelia/npm/` dans le conteneur NPM sous `/snippets`,
+  puis onglet Advanced :
+  ```
+  include /snippets/authelia-location.conf;
+  location / { include /snippets/proxy.conf; include /snippets/authelia-authrequest.conf; proxy_pass $forward_scheme://$server:$port; }
+  ```
+
+> **Piege n2 :** le certificat Let's Encrypt echoue (« Internal Error ») **tant que le DNS
+> ne resout pas** le domaine. Fais d'abord l'etape 4, attends quelques minutes, puis demande le cert.
+
+## 4. DNS
+
+Ajoute `desktop` et `auth` comme tes autres services (chez ton hebergeur DNS), pointant vers ton
+acces habituel (enregistrements A publics, ou IP de NPM en reseau local). Verifie :
 ```bash
-cd authelia
-printf 'AUTHELIA_SESSION_SECRET=%s\n'                              "$(openssl rand -hex 32)"  > secrets.env
-printf 'AUTHELIA_STORAGE_ENCRYPTION_KEY=%s\n'                      "$(openssl rand -hex 32)" >> secrets.env
-printf 'AUTHELIA_IDENTITY_VALIDATION_RESET_PASSWORD_JWT_SECRET=%s\n' "$(openssl rand -hex 32)" >> secrets.env
-cd ..
+nslookup desktop.exemple.fr
 ```
 
-**Utilisateur** (`authelia/users_database.yml`) — génère le hash puis colle-le :
-```bash
-docker run --rm authelia/authelia:4.39 authelia crypto hash generate argon2 --password 'TON_MOT_DE_PASSE'
-```
+## 5. Email (SMTP) — optionnel
+
+Renseigne dans l'assistant (serveur, port, identifiant, mot de passe), ou a la main dans
+`configuration.yml` :
 ```yaml
-# authelia/users_database.yml
-users:
-  admin:
-    disabled: false
-    displayname: 'Admin'
-    password: '$argon2id$v=19$...'   # ← colle le Digest ci-dessus
-    email: 'admin@goassistance.fr'
-    groups: ['admins']
-```
-
-**Config** (`authelia/configuration.yml`) — **URLs en HTTPS** :
-```yaml
-theme: 'dark'
-log: { level: 'info' }
-server: { address: 'tcp://:9091' }
-totp: { issuer: 'TrueNAS Desktop', period: 30 }
-authentication_backend:
-  file: { path: '/config/users_database.yml' }
-access_control:
-  default_policy: 'deny'
-  rules:
-    - domain: 'desktop.goassistance.fr'
-      policy: 'two_factor'
-session:
-  cookies:
-    - name: 'authelia_session'
-      domain: 'goassistance.fr'
-      authelia_url: 'https://auth.goassistance.fr'
-      default_redirection_url: 'https://desktop.goassistance.fr'
-      expiration: '1h'
-      inactivity: '15m'
-storage:
-  local: { path: '/config/db.sqlite3' }
 notifier:
-  filesystem: { filename: '/config/notification.txt' }
+  smtp:
+    address: 'submissions://mail.exemple.fr:465'   # 465 = SSL ; 587 -> submission://mail.exemple.fr:587 (STARTTLS)
+    username: 'noreply@exemple.fr'
+    sender: 'TrueNAS Desktop <noreply@exemple.fr>'
+    subject: '[Authelia] {title}'
 ```
-
-## 2. Démarrer Authelia (port 9091 publié pour NPM)
-
-`docker-compose.authelia.yml` :
-```yaml
-services:
-  authelia:
-    image: authelia/authelia:4.39
-    container_name: truenas-authelia
-    restart: unless-stopped
-    ports: ["9091:9091"]
-    volumes: ["/mnt/Truenas_Stockage/apps/desktop/authelia:/config"]
-    env_file: ["/mnt/Truenas_Stockage/apps/desktop/authelia/secrets.env"]
-    environment: { TZ: "Europe/Paris" }
-    healthcheck: { disable: true }
+et le mot de passe dans `secrets.env` :
 ```
-```bash
-docker rm -f truenas-authelia 2>/dev/null
-docker compose -f docker-compose.yml -f docker-compose.authelia.yml up -d authelia
-docker logs --tail 15 truenas-authelia    # doit dire "listening", sans "fatal"
+AUTHELIA_NOTIFIER_SMTP_PASSWORD=...
 ```
+puis **`docker compose up -d --force-recreate authelia`** (piege n1 !). Sans SMTP, les codes
+sont ecrits dans `authelia/notification.txt`.
 
-## 3. Bureau nginx « sans auth locale »
+## 6. Enrolement TOTP
 
-NPM+Authelia protège en amont : retire `auth_basic` du `nginx.conf` du bureau
-(le fichier `nginx-desktop-plain.conf` fourni est prêt), puis :
-```bash
-docker restart truenas-desktop
-```
-> ⚠️ L'accès **direct** à `192.168.0.200:8099` contourne alors Authelia. À restreindre
-> par pare-feu (n'autoriser que l'IP de NPM) une fois la 2FA validée.
+Ouvre `https://desktop.exemple.fr` -> portail Authelia -> login -> le code de verification arrive
+par email (ou dans `notification.txt`), puis scanne le QR (Aegis, Google Authenticator...).
 
-## 4. Snippets dans NPM
+## Pieges (resume)
 
-Sur l'hôte NPM, place les 3 fichiers de `authelia/npm/` (`authelia-location.conf`,
-`authelia-authrequest.conf`, `proxy.conf`) dans un dossier, et **monte-le dans le
-conteneur NPM sous `/snippets`** (ajout d'un volume `- /chemin/snippets:/snippets:ro`
-dans le compose de NPM, puis `docker restart` de NPM).
-
-> Dans `authelia-location.conf`, l'adresse d'Authelia est `http://192.168.0.200:9091`
-> (IP du NAS + port publié). Adapte si besoin.
-
-## 5. NPM — proxy host du portail
-
-`auth.goassistance.fr` → Forward **http** `192.168.0.200` port **9091**,
-SSL Let's Encrypt + **Force SSL** + **Websockets**. Rien dans « Advanced ».
-
-## 6. NPM — proxy host du bureau
-
-`desktop.goassistance.fr` → Forward **http** `192.168.0.200` port **8099**,
-SSL + Force SSL + Websockets. Onglet **Advanced** :
-```
-include /snippets/authelia-location.conf;
-location / {
-    include /snippets/proxy.conf;
-    include /snippets/authelia-authrequest.conf;
-    proxy_pass $forward_scheme://$server:$port;
-}
-```
-> Les liens de partage publics `/s/` seront alors protégés eux aussi. Si tu les
-> utilises, ajoute une location `/s/` **sans** `authelia-authrequest.conf`.
-
-## 7. DNS (AdGuard) — pointer vers **NPM**
-
-NPM est la porte d'entrée : les deux réécritures pointent vers **l'IP de NPM**, pas le NAS :
-```
-desktop.goassistance.fr → 192.168.0.254
-auth.goassistance.fr    → 192.168.0.254
-```
-
-## 8. Enrôler le TOTP
-
-Ouvre `https://desktop.goassistance.fr` → portail Authelia → login → il te propose
-d'enrôler le TOTP. Le lien d'activation est écrit dans :
-```bash
-cat /mnt/Truenas_Stockage/apps/desktop/authelia/notification.txt
-```
-Scanne le QR code (Aegis, Google Authenticator…). Les connexions suivantes demandent
-le **code à 6 chiffres**.
+- **`restart` ne recharge pas `secrets.env`** -> `up -d --force-recreate`.
+- **Cle de chiffrement changee** -> Authelia refuse la base (`db.sqlite3`). L'assistant preserve
+  desormais les secrets ; si tu changes la cle a la main, supprime `authelia/db.sqlite3` (vide tant
+  que rien n'est enrole) puis recree le conteneur.
+- **Cert Let's Encrypt** : DNS d'abord, certificat ensuite.
+- **`535 auth failed`** vient du **mot de passe SMTP** (ou d'un caractere invisible colle) : teste-le
+  dans le webmail ; s'il marche la, c'est que le conteneur n'a pas ete recree (voir piege n1).
 
 ## Secours
 
-L'accès direct au NAS (UI TrueNAS, SSH) n'est jamais affecté. Pour revenir en
-barrière simple : remets `auth_basic` dans le `nginx.conf` du bureau,
-`docker restart truenas-desktop`, et `docker rm -f truenas-authelia`.
+L'acces direct au NAS (UI TrueNAS, SSH) n'est jamais affecte. Pour revenir a la barriere simple :
+remets `auth_basic` dans le nginx du bureau, recree le bureau, et `docker rm -f truenas-authelia`.

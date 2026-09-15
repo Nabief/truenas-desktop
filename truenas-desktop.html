@@ -2333,7 +2333,7 @@ select option{ background:#101b2e; color:#e8edf5; }
     <div class="login-logo">🖥️</div>
     <h1>TrueNAS Desktop</h1>
     <p class="subtitle">Bureau moderne pour votre NAS</p>
-    <div class="login-url" id="login-url-display">nas.goassistance.fr</div>
+    <div class="login-url" id="login-url-display">nas.exemple.fr</div>
     <div class="form-group">
       <label>Nom d'utilisateur</label>
       <input type="text" id="login-user" placeholder="Utilisateur" autocomplete="username" />
@@ -4976,7 +4976,7 @@ async function webProxyToggle() {
   } catch(e) { toast('❌ ' + e.message); }
 }
 async function webSetHost() {
-  const v = await showPrompt('Adresse des liens de sites (IP ou hôte du NAS, ex: 192.168.0.200) :', webSiteHost());
+  const v = await showPrompt('Adresse des liens de sites (IP ou hôte du NAS, ex: 192.168.1.10) :', webSiteHost());
   if (v === null || v === undefined) return;
   const val = (v || '').trim();
   if (val && val !== window.location.hostname) { localStorage.setItem('web_site_host', val); _webSiteHost = val; }
