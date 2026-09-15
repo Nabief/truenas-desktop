@@ -137,6 +137,38 @@ def configure_truenas(ssh_user):
     else:
         emit(f'⚠ Utilisateur {ssh_user} introuvable — active le sudo NOPASSWD manuellement.', 'warn')
 
+    # 4. SSH 25.x : autoriser le login par mot de passe pour le groupe de l'utilisateur.
+    #    Sur TrueNAS 25.x, passwordauth=true ne suffit pas : le login mot de passe
+    #    est verrouille par 'password_login_groups' (vide => personne ; sshd met
+    #    PasswordAuthentication no hors bloc Match Group). On ajoute le groupe
+    #    principal de l'utilisateur SSH. Non bloquant (champ absent en < 25.x).
+    try:
+        grp_name = None
+        rc, out, _ = _midclt(['call', 'user.query', f'[["username","=","{ssh_user}"]]'])
+        u = (json.loads(out) or [{}])[0] if (rc == 0 and out) else {}
+        g = u.get('group') or {}
+        grp_name = g.get('bsdgrp_group') or g.get('group') or g.get('name')
+        if not grp_name and g.get('id') is not None:
+            rc, out, _ = _midclt(['call', 'group.query', json.dumps([["id", "=", g.get('id')]])])
+            gg = (json.loads(out) or [{}])[0] if out else {}
+            grp_name = gg.get('group') or gg.get('name')
+        if grp_name:
+            rc, out, _ = _midclt(['call', 'ssh.config'])
+            cur = json.loads(out) if out else {}
+            groups = list(cur.get('password_login_groups') or [])
+            if grp_name not in groups:
+                groups.append(grp_name)
+                rc, out, err = _midclt(['call', 'ssh.update', json.dumps({"password_login_groups": groups})])
+                if rc == 0:
+                    _midclt(['call', 'service.restart', 'ssh'])
+                    emit(f'✓ SSH : login mot de passe autorise pour le groupe {grp_name}', 'ok')
+                else:
+                    emit(f'⚠ password_login_groups non applique ({err or out}) — a regler en UI si besoin.', 'warn')
+            else:
+                emit(f'✓ SSH : groupe {grp_name} deja autorise (mot de passe)', 'ok')
+    except Exception as _e:
+        emit(f'⚠ Reglage password_login_groups ignore ({_e}).', 'warn')
+
 
 def _ensure_dataset(mount_path):
     """Crée un vrai dataset ZFS (+ ses ancêtres) pour un chemin sous /mnt via
