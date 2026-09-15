@@ -1014,14 +1014,15 @@ HTML = """<!DOCTYPE html>
   /* Pilule / interrupteur (toggle) */
   .form-group label.switch { display: flex; align-items: center; gap: 10px; cursor: pointer; user-select: none; margin-bottom: 0; }
   .switch input { position: absolute; opacity: 0; width: 0; height: 0; }
-  .switch .slider { width: 42px; height: 23px; background: var(--surface2); border: 1px solid var(--border);
+  .switch .slider { display: inline-block; vertical-align: middle; width: 42px; height: 23px;
+                    background: var(--surface2); border: 1px solid var(--border);
                     border-radius: 999px; position: relative; transition: .2s; flex-shrink: 0; }
   .switch .slider::before { content: ''; position: absolute; width: 17px; height: 17px; border-radius: 50%;
                     background: var(--dim); top: 2px; left: 2px; transition: .2s; }
   .switch input:checked + .slider { background: var(--accent); border-color: var(--accent); }
   .switch input:checked + .slider::before { transform: translateX(19px); background: #fff; }
   .switch input:focus-visible + .slider { box-shadow: 0 0 0 3px rgba(91,127,255,.35); }
-  .switch-label { font-size: 13px; color: var(--text); font-weight: 500; }
+  .switch-label { display: inline-block; vertical-align: middle; font-size: 13px; color: var(--text); font-weight: 500; }
 
   [hidden] { display: none !important; }
 
