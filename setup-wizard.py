@@ -74,8 +74,9 @@ INSTALL_LOG = '/tmp/tnd-install.log'
 def emit(msg, level='info'):
     INSTALL_EVENTS.put({'msg': msg, 'level': level})
     try:
+        import time as _t
         with open(INSTALL_LOG, 'a', encoding='utf-8') as f:
-            f.write(f'[{level}] {msg}\n')
+            f.write('%s [%s] %s\n' % (_t.strftime('%H:%M:%S'), level, msg))
     except Exception:
         pass
 
@@ -168,7 +169,7 @@ def _ensure_dataset(mount_path):
 
 
 def run_install(config):
-    global INSTALL_RUNNING, INSTALL_DONE
+    global INSTALL_RUNNING, INSTALL_DONE, INSTALL_LOG
     INSTALL_RUNNING = True
     INSTALL_DONE = False
     try:
@@ -263,6 +264,24 @@ def run_install(config):
             os.makedirs(os.path.join(install_dir, sub), exist_ok=True)
         emit(f'✓ {install_dir}', 'ok')
         emit(f'✓ {vm_dir}', 'ok')
+
+        # ── Journal persistant : /tmp → <install_dir>/install.log ──
+        # (rapport d'install durable et découvrable ; on y recopie les 1res lignes)
+        try:
+            _persist = os.path.join(install_dir, 'install.log')
+            _prev = ''
+            try:
+                with open(INSTALL_LOG, encoding='utf-8') as _lf:
+                    _prev = _lf.read()
+            except Exception:
+                pass
+            with open(_persist, 'w', encoding='utf-8') as _lf:
+                _lf.write("===== TrueNAS Desktop — journal d'installation =====\n")
+                _lf.write(_prev)
+            INSTALL_LOG = _persist
+            emit('✓ Journal d\'installation : %s' % _persist, 'ok')
+        except Exception:
+            pass
 
         # ── 1b. Prérequis TrueNAS automatisés (SSH + sudo) ────
         configure_truenas(ssh_user)
@@ -818,13 +837,22 @@ WantedBy=multi-user.target
             emit('✓ Stack Docker démarrée', 'ok')
         else:
             emit('✗ Erreur démarrage Docker', 'error')
+            emit('➤ Rapport d\'installation complet : %s' % INSTALL_LOG, 'error')
             INSTALL_RUNNING = False
             return
 
+        emit('✓ Journal d\'installation : %s' % INSTALL_LOG, 'ok')
         emit(f'__DONE__{truenas_ip}:{port}', 'done')
 
     except Exception as e:
-        emit(f'✗ Erreur : {e}', 'error')
+        import traceback as _tb
+        emit('✗ Erreur : %s' % e, 'error')
+        try:
+            with open(INSTALL_LOG, 'a', encoding='utf-8') as _lf:
+                _lf.write('\n----- TRACEBACK -----\n' + _tb.format_exc() + '\n')
+        except Exception:
+            pass
+        emit('➤ Rapport d\'installation complet (à envoyer en cas de souci) : %s' % INSTALL_LOG, 'error')
 
     finally:
         INSTALL_RUNNING = False
