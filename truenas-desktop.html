@@ -5084,7 +5084,7 @@ function webTypeFields() {
   } else {
     let h = formRow('Dossier racine',
       '<div style="display:flex;gap:6px;">'
-      + '<input id="web-root" value="' + (_webPrefillRoot||'').replace(/"/g,'&quot;') + '" placeholder="/mnt/Truenas_Stockage/…" style="' + iStyle() + ';flex:1;" />'
+      + '<input id="web-root" value="' + (_webPrefillRoot||'').replace(/"/g,'&quot;') + '" placeholder="/mnt/pool/…" style="' + iStyle() + ';flex:1;" />'
       + '<button class="fs-btn" style="padding:0 10px;flex-shrink:0;" onclick="webMkdir()" title="Créer un sous-dossier de site dans le dataset Web">＋</button>'
       + '<button class="fs-btn" style="padding:0 10px;flex-shrink:0;" onclick="openFilePicker(\'web-root\',null,\'/mnt\')" title="Parcourir">📁</button>'
       + '</div>');
@@ -8283,7 +8283,7 @@ function shareAddModal() {
   let f = '<div style="display:flex;flex-direction:column;gap:12px;">';
   f += formRow('Chemin *',
     '<div style="display:flex;gap:6px;">'
-    + '<input id="sh-path" placeholder="/mnt/Truenas_Stockage/…" style="' + iStyle() + ';flex:1;" />'
+    + '<input id="sh-path" placeholder="/mnt/pool/…" style="' + iStyle() + ';flex:1;" />'
     + '<button class="fs-btn" style="padding:0 10px;flex-shrink:0;" onclick="openFilePicker(\'sh-path\',null,\'/mnt\')" title="Parcourir">📁</button>'
     + '</div>');
   if (isSMB) f += formRow('Nom du partage', '<input id="sh-name" style="' + iStyle() + '" placeholder="ex: Vidéos" />');

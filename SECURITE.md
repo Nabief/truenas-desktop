@@ -30,7 +30,7 @@ Il faut donc activer la barrière à la main, une fois, sur le NAS.
 Depuis le Shell TrueNAS (adapte le chemin d'install si besoin) :
 
 ```bash
-cd /mnt/Truenas_Stockage/apps/desktop
+cd /mnt/<pool>/apps/desktop
 
 # 1) Identifiant + mot de passe du bureau (remplace VOTRE_MOT_DE_PASSE)
 printf 'admin:%s\n' "$(openssl passwd -apr1 'VOTRE_MOT_DE_PASSE')" > .htpasswd
@@ -53,7 +53,7 @@ et dans le bloc `location /s/ {`, ajoute en **première** ligne (pour garder les
 **3) `docker-compose.yml`** — dans le service `truenas-desktop`, ajoute un volume :
 
 ```yaml
-      - /mnt/Truenas_Stockage/apps/desktop/.htpasswd:/etc/nginx/.htpasswd:ro
+      - /mnt/<pool>/apps/desktop/.htpasswd:/etc/nginx/.htpasswd:ro
 ```
 
 **4) Recréer et recharger :**
@@ -70,7 +70,7 @@ Le navigateur demandera désormais l'identifiant/mot de passe **avant** d'affich
 Si tu te retrouves bloqué (mauvais mot de passe, `.htpasswd` vide/absent) :
 
 ```bash
-cd /mnt/Truenas_Stockage/apps/desktop
+cd /mnt/<pool>/apps/desktop
 # Option A : régénérer le mot de passe
 printf 'admin:%s\n' "$(openssl passwd -apr1 'NOUVEAU_MDP')" > .htpasswd && docker restart truenas-desktop
 # Option B : désactiver temporairement la barrière

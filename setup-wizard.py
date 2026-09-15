@@ -3,7 +3,7 @@
 #  TrueNAS Desktop — Wizard d'installation web
 #
 #  Usage depuis le shell TrueNAS :
-#    python3 /mnt/Truenas_Stockage/apps/desktop/setup-wizard.py
+#    python3 /mnt/<pool>/apps/desktop/setup-wizard.py
 #
 #  Puis ouvrir dans le navigateur :
 #    http://IP_TRUENAS:8099/setup
