@@ -11,8 +11,7 @@ L'installation se fait via un **assistant web** (formulaire) : une seule command
 
 ## Prérequis (côté TrueNAS, une fois)
 
-- TrueNAS SCALE **24.10 ou antérieur** (les VMs utilisent libvirt/KVM ;
-  voir la note « TrueNAS 25.04+ » plus bas).
+- TrueNAS SCALE **24.10 ou antérieur** (les VMs utilisent libvirt/KVM).
 - Un **pool de stockage** créé, et **Apps activé** (Apps → assigner un pool → Docker démarre).
 - **Réseau/DNS** fonctionnels (passerelle + DNS, ex. 1.1.1.1 / 8.8.8.8).
 - Un **utilisateur administrateur** local avec un **mot de passe** (ex. `truenas_admin`).
