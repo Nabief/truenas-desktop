@@ -1029,7 +1029,7 @@ HTML = """<!DOCTYPE html>
       <div class="form-group">
         <label>Répertoire d'installation</label>
         <div class="input-browse">
-          <input id="install_dir" value="/mnt/Truenas_Stockage/apps/desktop" />
+          <input id="install_dir" value="/mnt/pool/apps/desktop" placeholder="/mnt/&lt;votre-pool&gt;/apps/desktop" />
           <button class="btn-browse" onclick="openBrowser('install_dir')" title="Parcourir">📁</button>
         </div>
         <div id="pool-hint" style="font-size:12px;color:#8a9bbf;margin-top:4px;"></div>
@@ -1038,14 +1038,14 @@ HTML = """<!DOCTYPE html>
         <div class="form-group">
           <label>Dossier VMs</label>
           <div class="input-browse">
-            <input id="vm_dir" value="/mnt/Truenas_Stockage/vms" />
+            <input id="vm_dir" value="/mnt/pool/vms" />
             <button class="btn-browse" onclick="openBrowser('vm_dir')" title="Parcourir">📁</button>
           </div>
         </div>
         <div class="form-group">
           <label>Dossier ISOs (racine)</label>
           <div class="input-browse">
-            <input id="iso_dir" value="/mnt/Truenas_Stockage" />
+            <input id="iso_dir" value="/mnt/pool" />
             <button class="btn-browse" onclick="openBrowser('iso_dir')" title="Parcourir">📁</button>
           </div>
         </div>

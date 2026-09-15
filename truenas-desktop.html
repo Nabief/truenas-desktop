@@ -5729,7 +5729,7 @@ async function webNpmPanel() {
     h += '<div style="padding:10px;border:1px solid rgba(62,207,142,.35);border-radius:10px;background:rgba(62,207,142,.08);font-size:13px;color:var(--success);">✅ Reverse-proxy détecté : ' + (st.containers||[]).join(', ') + '</div>'
       + '<div style="font-size:12px;color:var(--text-dim);line-height:1.7;">Ouvre l\'admin NPMplus (souvent <b>https://' + ip + ':81</b>) et ajoute un « Proxy Host » par site avec domaine. Les valeurs exactes sont dans la fiche de chaque site (bouton 🔐 dans la liste des sites).</div>';
   } else {
-    const cmds = 'mkdir -p /mnt/Truenas_Stockage/apps/npmplus && cd /mnt/Truenas_Stockage/apps/npmplus\n'
+    const cmds = 'mkdir -p /mnt/<pool>/apps/npmplus && cd /mnt/<pool>/apps/npmplus   # remplace <pool> par ton pool\n'
       + 'curl -fsSL https://raw.githubusercontent.com/ZoeyVid/NPMplus/develop/compose.yaml -o compose.yaml\n'
       + '# Éditez TZ, ACME_EMAIL et — pour éviter le conflit 80/443 de TrueNAS —\n'
       + '# HTTP_PORT=8090  HTTPS_PORT=8453  NPM_PORT=8181\n'
