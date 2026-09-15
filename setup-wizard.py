@@ -196,6 +196,10 @@ def run_install(config):
         domain_auth    = (config.get('domain_auth') or '').strip().lower()
         admin_email    = (config.get('admin_email') or 'admin@example.com').strip()
         npm_ip      = (config.get('npm_ip') or '').strip()
+        smtp_host   = (config.get('smtp_host') or '').strip()
+        smtp_port   = (config.get('smtp_port') or '465').strip()
+        smtp_user   = (config.get('smtp_user') or '').strip()
+        smtp_pass   = (config.get('smtp_pass') or '').strip()
         # ── 2FA : Authelia DERRIÈRE Nginx Proxy Manager (NPM) ──
         #   Authelia 4.39 exige des URLs HTTPS ; c'est NPM (Let's Encrypt) qui
         #   les fournit. L'assistant fait TOUT le côté NAS (secrets, hash,
@@ -584,12 +588,28 @@ GITHUB_RAW={(config.get('github_raw') or GITHUB_RAW_DEFAULT).rstrip('/')}
             emit('▸ Configuration Authelia (2FA)...', 'step')
             adir = os.path.join(install_dir, 'authelia')
             os.makedirs(adir, exist_ok=True)
-            with open(os.path.join(adir, 'secrets.env'), 'w') as f:
-                f.write('AUTHELIA_SESSION_SECRET=%s\n' % secrets.token_hex(32))
-                f.write('AUTHELIA_STORAGE_ENCRYPTION_KEY=%s\n' % secrets.token_hex(32))
-                f.write('AUTHELIA_IDENTITY_VALIDATION_RESET_PASSWORD_JWT_SECRET=%s\n' % secrets.token_hex(32))
+            # Secrets : on PRÉSERVE ceux déjà présents. Régénérer la clé de
+            # chiffrement casserait la base Authelia (db.sqlite3) à chaque
+            # réinstallation → conteneur en boucle. On ne génère que le manquant.
+            _sfile = os.path.join(adir, 'secrets.env')
+            _sec = {}
+            if os.path.exists(_sfile):
+                for _l in open(_sfile):
+                    if '=' in _l and not _l.lstrip().startswith('#'):
+                        _k, _v = _l.split('=', 1)
+                        _sec[_k.strip()] = _v.rstrip('\n')
+            for _k in ('AUTHELIA_SESSION_SECRET',
+                       'AUTHELIA_STORAGE_ENCRYPTION_KEY',
+                       'AUTHELIA_IDENTITY_VALIDATION_RESET_PASSWORD_JWT_SECRET'):
+                if not _sec.get(_k):
+                    _sec[_k] = secrets.token_hex(32)
+            if smtp_pass:
+                _sec['AUTHELIA_NOTIFIER_SMTP_PASSWORD'] = smtp_pass
+            with open(_sfile, 'w') as f:
+                for _k, _v in _sec.items():
+                    f.write('%s=%s\n' % (_k, _v))
             try:
-                os.chmod(os.path.join(adir, 'secrets.env'), 0o600)
+                os.chmod(_sfile, 0o600)
             except Exception:
                 pass
             pw_hash = ''
@@ -611,6 +631,19 @@ GITHUB_RAW={(config.get('github_raw') or GITHUB_RAW_DEFAULT).rstrip('/')}
                 f.write("    password: '%s'\n" % (pw_hash or 'REMPLACE_PAR_LE_HASH_ARGON2ID'))
                 f.write("    email: '%s'\n" % admin_email)
                 f.write('    groups:\n      - admins\n')
+            # Notifier : SMTP (email réel) si renseigné, sinon fichier local.
+            if smtp_host and smtp_user and smtp_pass:
+                _scheme = 'submissions' if str(smtp_port) == '465' else 'submission'
+                _notifier_yaml = (
+                    "notifier:\n  smtp:\n"
+                    "    address: '%s://%s:%s'\n" % (_scheme, smtp_host, smtp_port) +
+                    "    username: '%s'\n" % smtp_user +
+                    "    sender: 'TrueNAS Desktop <%s>'\n" % smtp_user +
+                    "    subject: '[Authelia] {title}'\n"
+                )
+                emit('✓ Email (SMTP) configuré : %s via %s:%s' % (smtp_user, smtp_host, smtp_port), 'ok')
+            else:
+                _notifier_yaml = "notifier:\n  filesystem:\n    filename: '/config/notification.txt'\n"
             cfg = (
                 "theme: 'dark'\n"
                 "log:\n  level: 'info'\n"
@@ -625,8 +658,8 @@ GITHUB_RAW={(config.get('github_raw') or GITHUB_RAW_DEFAULT).rstrip('/')}
                 "      authelia_url: 'https://%s'\n" % domain_auth +
                 "      default_redirection_url: 'https://%s'\n" % domain_desktop +
                 "      expiration: '1h'\n      inactivity: '15m'\n"
-                "storage:\n  local:\n    path: '/config/db.sqlite3'\n"
-                "notifier:\n  filesystem:\n    filename: '/config/notification.txt'\n"
+                "storage:\n  local:\n    path: '/config/db.sqlite3'\n" +
+                _notifier_yaml
             )
             with open(os.path.join(adir, 'configuration.yml'), 'w') as f:
                 f.write(cfg)
@@ -700,9 +733,13 @@ GITHUB_RAW={(config.get('github_raw') or GITHUB_RAW_DEFAULT).rstrip('/')}
             emit("3) Hôte proxy BUREAU : %s  →  http  %s  port %s — SSL + Force SSL + Websockets. Onglet Advanced :" % (domain_desktop, truenas_ip, port), 'step')
             emit("      include /snippets/authelia-location.conf;", 'step')
             emit("      location / { include /snippets/proxy.conf; include /snippets/authelia-authrequest.conf; proxy_pass $forward_scheme://$server:$port; }", 'step')
-            emit('━━━━━ DNS (AdGuard) — pointer les 2 domaines vers NPM ━━━━━', 'step')
+            emit("   (NPMplus : plus simple — sur l'hôte BUREAU, Auth Request = 'authelia (modern)', Auth Request Upstream = http://%s:9091 ; rien à monter.)" % truenas_ip, 'step')
+            emit('━━━━━ DNS — pointer les 2 domaines vers l\'accès (comme tes autres services) ━━━━━', 'step')
             emit("   %s  →  %s      %s  →  %s" % (domain_desktop, _npm, domain_auth, _npm), 'step')
-            emit("➤ Enrôlement TOTP : ouvre https://%s , connecte-toi (%s), scanne le QR — lien aussi dans %s/authelia/notification.txt" % (domain_desktop, desk_user, install_dir), 'step')
+            if smtp_host and smtp_user and smtp_pass:
+                emit("➤ Enrôlement TOTP : ouvre https://%s , connecte-toi (%s) ; le code de vérification est envoyé par email à %s." % (domain_desktop, desk_user, admin_email), 'step')
+            else:
+                emit("➤ Enrôlement TOTP : ouvre https://%s , connecte-toi (%s), scanne le QR — le code est dans %s/authelia/notification.txt" % (domain_desktop, desk_user, install_dir), 'step')
 
         # ── 7. Configuration host TrueNAS ─────────────────────
         host_script = os.path.join(install_dir, 'setup-truenas-host.sh')
@@ -1017,6 +1054,26 @@ HTML = """<!DOCTYPE html>
           <input id="npm_ip" placeholder="192.168.0.254" />
           <div class="hint">Le HTTPS de la 2FA passe par NPM. Les 2 domaines pointeront vers cette IP.</div>
         </div>
+        <div class="section-title" style="font-size:0.95em;">✉️ Email (optionnel — pour envoyer les codes par mail)</div>
+        <div class="form-row">
+          <div class="form-group">
+            <label>Serveur SMTP</label>
+            <input id="smtp_host" placeholder="mail.exemple.fr" />
+          </div>
+          <div class="form-group">
+            <label>Port</label>
+            <input id="smtp_port" value="465" placeholder="465" />
+          </div>
+        </div>
+        <div class="form-group">
+          <label>Identifiant SMTP (adresse d'envoi)</label>
+          <input id="smtp_user" placeholder="noreply@exemple.fr" />
+        </div>
+        <div class="form-group">
+          <label>Mot de passe SMTP</label>
+          <input id="smtp_pass" type="password" placeholder="Laisse vide pour envoyer les codes dans un fichier local" />
+          <div class="hint">Si rempli : Authelia envoie les codes par email (port 465 = SSL, 587 = STARTTLS). Si vide : les codes sont écrits dans authelia/notification.txt.</div>
+        </div>
         <div class="hint">L'assistant configure tout le côté NAS. Il reste ensuite à créer 2 hôtes proxy dans NPM + les redirections DNS vers l'IP de NPM — l'assistant affiche les valeurs exactes à la fin. L'enrôlement TOTP se fait après l'installation.</div>
       </div>
 
@@ -1186,6 +1243,10 @@ function startInstall() {
     domain_auth:    document.getElementById('domain_auth').value.trim(),
     admin_email:    document.getElementById('admin_email').value.trim(),
     npm_ip:         document.getElementById('npm_ip').value.trim(),
+    smtp_host:      document.getElementById('smtp_host').value.trim(),
+    smtp_port:      document.getElementById('smtp_port').value.trim(),
+    smtp_user:      document.getElementById('smtp_user').value.trim(),
+    smtp_pass:      document.getElementById('smtp_pass').value,
   };
 
   goTo(3);
