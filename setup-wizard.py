@@ -1168,7 +1168,11 @@ HTML = """<!DOCTYPE html>
           <input id="npm_ip" placeholder="192.168.1.2" />
           <div class="hint">Le HTTPS de la 2FA passe par NPM. Les 2 domaines pointeront vers cette IP.</div>
         </div>
-        <div class="section-title" style="font-size:0.95em;">✉️ Email (optionnel — pour envoyer les codes par mail)</div>
+        <div class="form-group" style="margin-top:10px;">
+          <label><input type="checkbox" id="enable_email" onchange="document.getElementById('emailfields').hidden=!this.checked;updateInstallBtn()" style="width:auto;margin-right:8px;vertical-align:middle;" />Envoyer les codes 2FA par email (SMTP)</label>
+          <div class="hint">Décoché : les codes 2FA sont écrits dans un fichier local (authelia/notification.txt) — le plus simple. Coché : renseigne et teste le SMTP ci-dessous.</div>
+        </div>
+        <div id="emailfields" hidden>
         <div class="form-row">
           <div class="form-group">
             <label>Serveur SMTP</label>
@@ -1191,8 +1195,9 @@ HTML = """<!DOCTYPE html>
         <div class="form-group">
           <button type="button" class="btn btn-secondary" id="btn-smtp-test" onclick="testSmtp()" style="width:100%;justify-content:center;">Tester le SMTP</button>
           <div id="smtp-status" class="hint" style="margin-top:6px;"></div>
-          <div class="hint">Si tu remplis le mot de passe SMTP, le test doit réussir avant de pouvoir installer (sinon l'enrôlement 2FA par email serait impossible). Laisse-le vide pour utiliser le fichier local.</div>
+          <div class="hint">Le test doit réussir avant de pouvoir installer (sinon l'enrôlement 2FA par email serait impossible).</div>
         </div>
+        </div><!-- /emailfields -->
         <div class="hint">L'assistant configure tout le côté NAS. Il reste ensuite à créer 2 hôtes proxy dans NPM + les redirections DNS vers l'IP de NPM — l'assistant affiche les valeurs exactes à la fin. L'enrôlement TOTP se fait après l'installation.</div>
       </div>
 
@@ -1256,8 +1261,9 @@ function goTo(n) {
 // ── Vérification SMTP avant install (2FA par email) ───────────
 var smtpState = 'untested';
 function _v(id){ var e = document.getElementById(id); return e ? e.value.trim() : ''; }
+function _emailOn(){ var e = document.getElementById('enable_email'); return !!(e && e.checked); }
 function smtpUsesEmail(){
-  return !!(_v('smtp_host') && _v('smtp_user') && document.getElementById('smtp_pass').value);
+  return _emailOn() && !!(_v('smtp_host') && _v('smtp_user') && document.getElementById('smtp_pass').value);
 }
 function smtpChanged(){
   smtpState = 'untested';
@@ -1417,10 +1423,10 @@ function startInstall() {
     domain_auth:    document.getElementById('domain_auth').value.trim(),
     admin_email:    document.getElementById('admin_email').value.trim(),
     npm_ip:         document.getElementById('npm_ip').value.trim(),
-    smtp_host:      document.getElementById('smtp_host').value.trim(),
+    smtp_host:      _emailOn() ? document.getElementById('smtp_host').value.trim() : '',
     smtp_port:      document.getElementById('smtp_port').value.trim(),
-    smtp_user:      document.getElementById('smtp_user').value.trim(),
-    smtp_pass:      document.getElementById('smtp_pass').value,
+    smtp_user:      _emailOn() ? document.getElementById('smtp_user').value.trim() : '',
+    smtp_pass:      _emailOn() ? document.getElementById('smtp_pass').value : '',
   };
 
   goTo(3);
