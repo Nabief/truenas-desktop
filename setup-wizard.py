@@ -71,12 +71,15 @@ def generate_token():
 INSTALL_LOG = '/tmp/tnd-install.log'
 
 
-def emit(msg, level='info'):
+def emit(msg, level='info', secret=False):
+    # secret=True : le message s'affiche à l'écran mais n'est PAS écrit dans le
+    # journal persistant (évite d'y laisser un mot de passe en clair).
     INSTALL_EVENTS.put({'msg': msg, 'level': level})
     try:
         import time as _t
+        _logmsg = '(masqué — non journalisé)' if secret else msg
         with open(INSTALL_LOG, 'a', encoding='utf-8') as f:
-            f.write('%s [%s] %s\n' % (_t.strftime('%H:%M:%S'), level, msg))
+            f.write('%s [%s] %s\n' % (_t.strftime('%H:%M:%S'), level, _logmsg))
     except Exception:
         pass
 
@@ -614,7 +617,7 @@ GITHUB_RAW={(config.get('github_raw') or GITHUB_RAW_DEFAULT).rstrip('/')}
             except OSError:
                 pass  # chmod refusé sur ZFS (ACL) — non bloquant
             _htpasswd_ok = os.path.getsize(_htp) > 0
-            emit('✓ Accès bureau — utilisateur: %s  mot de passe: %s' % (desk_user, desk_pass), 'ok')
+            emit('✓ Accès bureau — utilisateur: %s  mot de passe: %s' % (desk_user, desk_pass), 'ok', secret=True)
         except Exception as e:
             emit('⚠ .htpasswd non généré: %s' % e, 'warn')
 
