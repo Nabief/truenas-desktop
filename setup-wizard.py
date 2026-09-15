@@ -1012,7 +1012,7 @@ HTML = """<!DOCTYPE html>
   @keyframes spin { to { transform: rotate(360deg); } }
 
   /* Pilule / interrupteur (toggle) */
-  .switch { display: flex; align-items: center; gap: 10px; cursor: pointer; user-select: none; }
+  .form-group label.switch { display: flex; align-items: center; gap: 10px; cursor: pointer; user-select: none; margin-bottom: 0; }
   .switch input { position: absolute; opacity: 0; width: 0; height: 0; }
   .switch .slider { width: 42px; height: 23px; background: var(--surface2); border: 1px solid var(--border);
                     border-radius: 999px; position: relative; transition: .2s; flex-shrink: 0; }
