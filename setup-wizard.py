@@ -1396,7 +1396,7 @@ function startInstall() {
   if (!ip)   { alert('IP TrueNAS obligatoire'); return; }
   if (!pass) { alert('Mot de passe SSH obligatoire'); return; }
   if (document.getElementById('enable_2fa').checked && smtpUsesEmail() && smtpState !== 'ok') {
-    alert('Teste d\'abord le SMTP (il doit réussir), ou laisse le mot de passe SMTP vide pour utiliser le fichier local.');
+    alert('Teste le SMTP (il doit réussir) avant de lancer, ou laisse le mot de passe SMTP vide pour utiliser le fichier local.');
     return;
   }
 
