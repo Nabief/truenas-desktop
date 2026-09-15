@@ -860,28 +860,49 @@ cd "$INSTALL_DIR" && /usr/bin/docker compose up -d >> "$LOG" 2>&1
 echo "exit docker compose: $?" >> "$LOG"
 """
         autostart_path = os.path.join(install_dir, 'autostart.sh')
-        with open(autostart_path, 'w') as f:
-            f.write(autostart)
-        os.chmod(autostart_path, 0o755)
-        if shutil.which('midclt'):
-            _cmd = f'bash {autostart_path}'
-            rc, out, err = _midclt(['call', 'initshutdownscript.query',
-                                    json.dumps([["comment", "=", "TrueNAS Desktop autostart"]])])
+        # Étape non bloquante + tolérante aux ACL NFSv4 (aclmode restreint) : un
+        # échec ici ne doit pas interrompre l'install (le bureau démarre quand même).
+        try:
             try:
-                for _e in json.loads(out or '[]'):
-                    _midclt(['call', 'initshutdownscript.delete', str(_e.get('id'))])
-            except Exception:
+                if os.path.exists(autostart_path):
+                    try:
+                        os.remove(autostart_path)
+                    except Exception:
+                        pass
+                with open(autostart_path, 'w') as f:
+                    f.write(autostart)
+            except OSError:
+                # Dataset en ACL restreinte : on écrit via un fichier temporaire.
+                import tempfile as _tf
+                _fd, _tmp = _tf.mkstemp()
+                with os.fdopen(_fd, 'w') as _tfh:
+                    _tfh.write(autostart)
+                shutil.move(_tmp, autostart_path)
+            try:
+                os.chmod(autostart_path, 0o755)  # inutile (lancé via 'bash'), ignoré si ACL refuse
+            except OSError:
                 pass
-            payload = json.dumps({"type": "COMMAND", "command": _cmd, "when": "POSTINIT",
-                                  "enabled": True, "timeout": 300,
-                                  "comment": "TrueNAS Desktop autostart"})
-            rc, out, err = _midclt(['call', 'initshutdownscript.create', payload])
-            if rc == 0:
-                emit('✓ Démarrage auto configuré (Init/Shutdown Script POSTINIT)', 'ok')
+            if shutil.which('midclt'):
+                _cmd = f'bash {autostart_path}'
+                rc, out, err = _midclt(['call', 'initshutdownscript.query',
+                                        json.dumps([["comment", "=", "TrueNAS Desktop autostart"]])])
+                try:
+                    for _e in json.loads(out or '[]'):
+                        _midclt(['call', 'initshutdownscript.delete', str(_e.get('id'))])
+                except Exception:
+                    pass
+                payload = json.dumps({"type": "COMMAND", "command": _cmd, "when": "POSTINIT",
+                                      "enabled": True, "timeout": 300,
+                                      "comment": "TrueNAS Desktop autostart"})
+                rc, out, err = _midclt(['call', 'initshutdownscript.create', payload])
+                if rc == 0:
+                    emit('✓ Démarrage auto configuré (Init/Shutdown Script POSTINIT)', 'ok')
+                else:
+                    emit(f'⚠ POSTINIT non créé ({err or out}) — à configurer en UI si besoin.', 'warn')
             else:
-                emit(f'⚠ POSTINIT non créé ({err or out}) — lance {autostart_path} au besoin.', 'warn')
-        else:
-            emit('⚠ midclt introuvable — démarrage auto non configuré.', 'warn')
+                emit('⚠ midclt introuvable — démarrage auto non configuré.', 'warn')
+        except Exception as _pe:
+            emit(f'⚠ Démarrage auto non configuré ({_pe}) — non bloquant, le bureau démarre quand même.', 'warn')
 
         # ── 9. Démarrage Docker ───────────────────────────────
         emit('▸ Démarrage de la stack Docker...', 'step')
