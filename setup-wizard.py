@@ -613,7 +613,7 @@ GITHUB_RAW={(config.get('github_raw') or GITHUB_RAW_DEFAULT).rstrip('/')}
             with open(_htp, 'w') as f:
                 f.write('%s:%s\n' % (desk_user, _h))
             try:
-                os.chmod(_htp, 0o600)
+                os.chmod(_htp, 0o644)  # lisible par nginx (worker non-root du conteneur) — hash uniquement
             except OSError:
                 pass  # chmod refusé sur ZFS (ACL) — non bloquant
             _htpasswd_ok = os.path.getsize(_htp) > 0
