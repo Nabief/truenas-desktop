@@ -87,3 +87,5 @@ L'installation se fait via un **assistant web** (formulaire) : une seule command
   (L'assistant à jour le fait automatiquement.)
 - **Voyant WS rouge** : mot de passe SSH modifié après l'install → relancer
   l'assistant pour resynchroniser.
+- **Identifiants du bureau oubliés** : réinitialiser le `.htpasswd` ou relancer
+  l'assistant. Détails (barrière simple + 2FA/TOTP) : section « Récupération » de `SECURITE.md`.

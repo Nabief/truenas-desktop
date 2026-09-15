@@ -93,3 +93,42 @@ socle mono-facteur en attendant.
 - **Clé SSH dédiée** pour le sidecar + **désactivation de l'auth SSH par mot de passe** sur le NAS (réduit la surface de brute-force). Le `sudo NOPASSWD` reste nécessaire au pilotage libvirt.
 - **Permissions strictes** sur les secrets (`.env`, `config.env`, `.htpasswd` en `chmod 600`).
 - **Ne monter que les datasets utiles** au lieu de tout `/mnt`, si l'usage le permet.
+
+
+## Récupération — identifiants / mot de passe oubliés
+
+Il n'y a pas de « mot de passe oublié » intégré, mais rien n'est bloquant : l'admin du
+NAS garde toujours la main (l'accès UI TrueNAS / SSH n'est jamais protégé par le bureau).
+Remplace `<pool>` par ton pool de stockage.
+
+### Barrière simple (login du bureau)
+
+Le mot de passe n'est pas stocké en clair (seulement le hash `.htpasswd`) : on le **réinitialise**.
+
+- Le plus simple : **relancer l'assistant d'installation** (idempotent) en saisissant un
+  nouveau mot de passe → il régénère `.htpasswd`.
+- Ou en une ligne (SSH / Shell TrueNAS) :
+  ```bash
+  printf 'admin:%s\n' "$(openssl passwd -apr1 'NOUVEAU_MDP')" > /mnt/<pool>/apps/desktop/.htpasswd
+  docker restart truenas-desktop
+  ```
+
+### 2FA Authelia
+
+- **Mot de passe oublié** : si le SMTP est configuré, utilise le lien « Réinitialiser le
+  mot de passe » du portail (mail). Sinon, régénère le hash argon2 et remplace-le dans
+  `authelia/users_database.yml` :
+  ```bash
+  docker run --rm authelia/authelia:4.39 authelia crypto hash generate argon2 --password 'NOUVEAU_MDP'
+  # colle la chaine $argon2id$... dans users_database.yml, puis :
+  docker compose up -d --force-recreate authelia
+  ```
+- **Appareil TOTP perdu** (téléphone cassé...) : efface l'enrôlement et recommence :
+  ```bash
+  rm -f /mnt/<pool>/apps/desktop/authelia/db.sqlite3
+  docker restart truenas-authelia
+  ```
+  → à la reconnexion, Authelia propose de ré-enrôler un nouveau QR code.
+
+> Filet ultime : l'accès **UI TrueNAS / SSH** du NAS n'est jamais protégé par le bureau —
+> on ne peut donc pas se verrouiller dehors définitivement.
