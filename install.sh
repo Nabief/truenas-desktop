@@ -497,36 +497,54 @@ p.write_text(s, encoding="utf-8")
 PYCFG
 success "Configuration locale injectée : Interface TrueNAS -> $TRUENAS_UI_URL"
 
-# ── Configuration du host TrueNAS ─────────────────────────────
-info "Configuration du host TrueNAS (libvirtd, polkit, réseau)..."
-bash "$INSTALL_DIR/setup-truenas-host.sh"
-
-# ── Service systemd (démarrage automatique au boot) ───────────
-info "Configuration du service systemd..."
-cat > /etc/systemd/system/truenas-desktop.service << EOF
-[Unit]
-Description=TrueNAS Desktop App
-After=zfs-mount.service docker.service network-online.target middlewared.service libvirtd.service
-Wants=docker.service network-online.target libvirtd.service
-
-[Service]
-Type=oneshot
-RemainAfterExit=yes
-WorkingDirectory=${INSTALL_DIR}
-ExecStartPre=-/bin/systemctl start libvirtd
-ExecStartPre=/bin/sh -c 'for i in $(seq 1 30); do test -S /run/libvirt/libvirt-sock && exit 0; sleep 1; done; exit 1'
-ExecStart=/usr/bin/docker compose up -d
-ExecStop=/usr/bin/docker compose down
-TimeoutStartSec=120
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
-# Supprime l'ancienne configuration du socket non standard, si elle existe.
+# ── Réparation : suppression des anciennes modifs /etc (boot 25.x) ──
+info "Nettoyage des anciennes modifications systemd/libvirt..."
+systemctl disable truenas-desktop 2>/dev/null || true
+rm -f /etc/systemd/system/truenas-desktop.service
+rm -f /etc/systemd/system/libvirtd.service.d/notimeout.conf
+rmdir /etc/systemd/system/libvirtd.service.d 2>/dev/null || true
 rm -f /etc/tmpfiles.d/truenas-libvirt.conf
-systemctl daemon-reload
-systemctl enable truenas-desktop 2>/dev/null && success "Service systemd activé (démarrage auto au boot)"
+rm -f /etc/polkit-1/rules.d/80-truenas-libvirt.rules
+systemctl daemon-reload 2>/dev/null || true
+
+# ── Préparation libvirt à la demande (sans modif /etc, sans 'enable') ──
+info "Préparation de libvirt (à la demande)..."
+bash "$INSTALL_DIR/setup-truenas-host.sh" || warn "Préparation libvirt non bloquante"
+
+# ── Démarrage automatique via Init/Shutdown Script TrueNAS (POSTINIT) ──
+# Remplace l'ancien service systemd : un POSTINIT s'exécute APRÈS le middleware,
+# hors du chemin critique de boot (aucun « ordering cycle » possible sur 25.x).
+info "Configuration du démarrage automatique (POSTINIT)..."
+cat > "$INSTALL_DIR/autostart.sh" << 'AEOF'
+#!/bin/bash
+# TrueNAS Desktop — demarrage POSTINIT (v1.4.0). N'altere jamais l'ordonnancement systemd.
+set +e
+INSTALL_DIR="$(cd "$(dirname "$0")" && pwd)"
+LOG="$INSTALL_DIR/autostart.log"
+echo "=== $(date '+%F %T') POSTINIT ===" >> "$LOG"
+for i in $(seq 1 30); do docker info >/dev/null 2>&1 && break; sleep 2; done
+systemctl start libvirtd 2>/dev/null || systemctl start virtqemud 2>/dev/null || true
+virsh -c qemu:///system net-start default >/dev/null 2>&1 || true
+cd "$INSTALL_DIR" && /usr/bin/docker compose up -d >> "$LOG" 2>&1
+echo "exit docker compose: $?" >> "$LOG"
+AEOF
+chmod +x "$INSTALL_DIR/autostart.sh"
+if command -v midclt >/dev/null 2>&1; then
+  midclt call initshutdownscript.query '[["comment","=","TrueNAS Desktop autostart"]]' 2>/dev/null \
+    | python3 -c 'import sys,json
+try:
+    for e in json.load(sys.stdin): print(e["id"])
+except Exception: pass' 2>/dev/null \
+    | while read -r _id; do [ -n "$_id" ] && midclt call initshutdownscript.delete "$_id" >/dev/null 2>&1; done
+  if midclt call initshutdownscript.create \
+      "{\"type\":\"COMMAND\",\"command\":\"bash $INSTALL_DIR/autostart.sh\",\"when\":\"POSTINIT\",\"enabled\":true,\"timeout\":300,\"comment\":\"TrueNAS Desktop autostart\"}" >/dev/null 2>&1; then
+    success "Démarrage auto configuré (Init/Shutdown Script POSTINIT)"
+  else
+    warn "POSTINIT non créé — lancez \$INSTALL_DIR/autostart.sh au besoin."
+  fi
+else
+  warn "midclt introuvable — démarrage auto non configuré."
+fi
 
 # ── Démarrage de la stack Docker ──────────────────────────────
 info "Démarrage de la stack Docker..."

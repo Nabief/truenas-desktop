@@ -1,64 +1,52 @@
 #!/bin/bash
 # ============================================================
-# setup-truenas-host.sh
-# À exécuter UNE FOIS en root sur le host TrueNAS SCALE
-# pour activer la gestion QEMU/KVM depuis le bureau.
+# setup-truenas-host.sh  (v1.4.0)
+# Prépare libvirt/QEMU-KVM pour le bureau, SANS modifier /etc.
+#
+#   ⚠ Les versions <1.4.0 écrivaient un drop-in systemd
+#     (/etc/systemd/system/libvirtd.service.d/notimeout.conf), une règle
+#     polkit et faisaient « systemctl enable ». Sur TrueNAS 25.x cela
+#     créait un « ordering cycle » systemd fatal (ix-etc.service /
+#     middlewared en échec au boot → « middleware is not running »).
+#
+#   Cette version ne touche plus /etc : elle démarre libvirt À LA DEMANDE
+#   (start, jamais enable) et n'altère pas l'ordonnancement de boot.
+#   Le démarrage automatique de la stack est géré par un Init/Shutdown
+#   Script TrueNAS (POSTINIT), en dehors du chemin critique systemd.
 #
 # Usage :
 #   chmod +x setup-truenas-host.sh
 #   sudo ./setup-truenas-host.sh
 #
-# Idempotent : sans danger à relancer après une mise à jour.
+# Idempotent, sans effet de bord sur le boot.
 # ============================================================
-set -e
+set +e
 
 VIRSH_URI="qemu:///system"
-VM_DIR="/mnt/Truenas_Stockage/vms"
 
-echo "=== 1/5  Suppression du timeout libvirtd ==="
-mkdir -p /etc/systemd/system/libvirtd.service.d
-cat > /etc/systemd/system/libvirtd.service.d/notimeout.conf << 'EOF'
-[Service]
-Environment=LIBVIRTD_ARGS=
-EOF
-systemctl daemon-reload
-systemctl restart libvirtd
+echo "=== Réparation : suppression des anciennes modifs /etc (si présentes) ==="
+systemctl disable truenas-desktop 2>/dev/null || true
+rm -f /etc/systemd/system/truenas-desktop.service
+rm -f /etc/systemd/system/libvirtd.service.d/notimeout.conf
+rmdir /etc/systemd/system/libvirtd.service.d 2>/dev/null || true
+rm -f /etc/tmpfiles.d/truenas-libvirt.conf
+rm -f /etc/polkit-1/rules.d/80-truenas-libvirt.rules
+systemctl daemon-reload 2>/dev/null || true
 
-echo "=== 2/5  Attente du socket libvirt ==="
+echo "=== Démarrage de libvirt (à la demande, sans 'enable') ==="
+systemctl unmask libvirtd.socket libvirtd-ro.socket libvirtd-admin.socket 2>/dev/null || true
+systemctl start libvirtd 2>/dev/null || systemctl start virtqemud 2>/dev/null || true
+
+echo "=== Attente du socket libvirt ==="
 for i in $(seq 1 15); do
   [ -S /run/libvirt/libvirt-sock ] && echo "  socket OK" && break
-  echo "  attente $i/15..."
   sleep 1
 done
-if [ ! -S /run/libvirt/libvirt-sock ]; then
-  echo "ERREUR : socket libvirt introuvable après 15s"
-  journalctl -u libvirtd -n 20 --no-pager
-  exit 1
-fi
 
-echo "=== 3/5  Règle polkit pour truenas_admin ==="
-mkdir -p /etc/polkit-1/rules.d
-cat > /etc/polkit-1/rules.d/80-truenas-libvirt.rules << 'EOF'
-polkit.addRule(function(action, subject) {
-    if (action.id == "org.libvirt.unix.manage" &&
-        subject.user == "truenas_admin") {
-            return polkit.Result.YES;
-    }
-});
-EOF
-echo "  règle écrite dans /etc/polkit-1/rules.d/80-truenas-libvirt.rules"
-
-echo "=== 4/5  Réseau 'default' libvirt ==="
-virsh -c "$VIRSH_URI" net-start default 2>/dev/null && echo "  default démarré" || echo "  default déjà actif"
-virsh -c "$VIRSH_URI" net-autostart default && echo "  autostart activé" || true
-
-echo "=== 5/5  Dossier VMs ==="
-mkdir -p "$VM_DIR"
-chmod 777 "$VM_DIR"
-echo "  $VM_DIR prêt"
+echo "=== Réseau 'default' libvirt ==="
+virsh -c "$VIRSH_URI" net-start default 2>/dev/null && echo "  default démarré" || echo "  default déjà actif/absent"
 
 echo ""
-echo "=== Setup terminé ! ==="
-echo "Vérification :"
-virsh -c "$VIRSH_URI" list --all
-virsh -c "$VIRSH_URI" net-list --all
+echo "=== Terminé (aucune modification de /etc, aucun impact sur le boot). ==="
+virsh -c "$VIRSH_URI" list --all 2>/dev/null
+virsh -c "$VIRSH_URI" net-list --all 2>/dev/null

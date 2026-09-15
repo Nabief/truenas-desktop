@@ -796,42 +796,60 @@ GITHUB_RAW={(config.get('github_raw') or GITHUB_RAW_DEFAULT).rstrip('/')}
             else:
                 emit("➤ Enrôlement TOTP : ouvre https://%s , connecte-toi (%s), scanne le QR — le code est dans %s/authelia/notification.txt" % (domain_desktop, desk_user, install_dir), 'step')
 
-        # ── 7. Configuration host TrueNAS ─────────────────────
-        host_script = os.path.join(install_dir, 'setup-truenas-host.sh')
-        if os.path.exists(host_script):
-            emit('▸ Configuration host TrueNAS (libvirtd, polkit)...', 'step')
-            rc = run_cmd(f'bash {host_script}')
-            if rc == 0:
-                emit('✓ Host configuré', 'ok')
-            else:
-                emit('⚠ Erreur configuration host (non bloquant)', 'warn')
+        # ── 7. Nettoyage des anciennes modifs /etc (réparation boot 25.x) ──
+        emit('▸ Nettoyage des anciennes modifications systemd/libvirt...', 'step')
+        _cleanup = (
+            'systemctl disable truenas-desktop 2>/dev/null || true; '
+            'rm -f /etc/systemd/system/truenas-desktop.service; '
+            'rm -f /etc/systemd/system/libvirtd.service.d/notimeout.conf; '
+            'rmdir /etc/systemd/system/libvirtd.service.d 2>/dev/null || true; '
+            'rm -f /etc/tmpfiles.d/truenas-libvirt.conf; '
+            'rm -f /etc/polkit-1/rules.d/80-truenas-libvirt.rules; '
+            'systemctl daemon-reload 2>/dev/null || true'
+        )
+        run_cmd(_cleanup)
 
-        # ── 8. Service systemd ────────────────────────────────
-        emit('▸ Configuration service systemd...', 'step')
-        service = f"""[Unit]
-Description=TrueNAS Desktop App
-After=zfs-mount.service docker.service network-online.target middlewared.service
-Wants=docker.service network-online.target
-
-[Service]
-Type=oneshot
-RemainAfterExit=yes
-WorkingDirectory={install_dir}
-ExecStartPre=/bin/mkdir -p /run/truenas_libvirt
-ExecStartPre=-/bin/systemctl start libvirtd
-ExecStart=/usr/bin/docker compose up -d
-ExecStop=/usr/bin/docker compose down
-TimeoutStartSec=120
-
-[Install]
-WantedBy=multi-user.target
+        # ── 8. Démarrage auto via Init/Shutdown Script TrueNAS (POSTINIT) ──
+        # Remplace l'ancien service systemd (qui provoquait un « ordering cycle »
+        # fatal sur TrueNAS 25.x). Un POSTINIT s'exécute APRÈS le middleware, hors
+        # du chemin critique de boot : aucun impact sur ix-etc/middlewared.
+        emit('▸ Configuration du démarrage automatique (POSTINIT)...', 'step')
+        autostart = f"""#!/bin/bash
+# TrueNAS Desktop — demarrage POSTINIT (v1.4.0). Enregistre via midclt
+# (initshutdownscript, when=POSTINIT). N'altere JAMAIS l'ordonnancement systemd.
+set +e
+INSTALL_DIR="{install_dir}"
+LOG="$INSTALL_DIR/autostart.log"
+echo "=== $(date '+%F %T') POSTINIT ===" >> "$LOG"
+for i in $(seq 1 30); do docker info >/dev/null 2>&1 && break; sleep 2; done
+systemctl start libvirtd 2>/dev/null || systemctl start virtqemud 2>/dev/null || true
+virsh -c qemu:///system net-start default >/dev/null 2>&1 || true
+cd "$INSTALL_DIR" && /usr/bin/docker compose up -d >> "$LOG" 2>&1
+echo "exit docker compose: $?" >> "$LOG"
 """
-        with open('/etc/systemd/system/truenas-desktop.service', 'w') as f:
-            f.write(service)
-        with open('/etc/tmpfiles.d/truenas-libvirt.conf', 'w') as f:
-            f.write('d /run/truenas_libvirt 0755 root root -\n')
-        run_cmd('systemctl daemon-reload && systemctl enable truenas-desktop 2>/dev/null')
-        emit('✓ Service systemd activé', 'ok')
+        autostart_path = os.path.join(install_dir, 'autostart.sh')
+        with open(autostart_path, 'w') as f:
+            f.write(autostart)
+        os.chmod(autostart_path, 0o755)
+        if shutil.which('midclt'):
+            _cmd = f'bash {autostart_path}'
+            rc, out, err = _midclt(['call', 'initshutdownscript.query',
+                                    json.dumps([["comment", "=", "TrueNAS Desktop autostart"]])])
+            try:
+                for _e in json.loads(out or '[]'):
+                    _midclt(['call', 'initshutdownscript.delete', str(_e.get('id'))])
+            except Exception:
+                pass
+            payload = json.dumps({"type": "COMMAND", "command": _cmd, "when": "POSTINIT",
+                                  "enabled": True, "timeout": 300,
+                                  "comment": "TrueNAS Desktop autostart"})
+            rc, out, err = _midclt(['call', 'initshutdownscript.create', payload])
+            if rc == 0:
+                emit('✓ Démarrage auto configuré (Init/Shutdown Script POSTINIT)', 'ok')
+            else:
+                emit(f'⚠ POSTINIT non créé ({err or out}) — lance {autostart_path} au besoin.', 'warn')
+        else:
+            emit('⚠ midclt introuvable — démarrage auto non configuré.', 'warn')
 
         # ── 9. Démarrage Docker ───────────────────────────────
         emit('▸ Démarrage de la stack Docker...', 'step')

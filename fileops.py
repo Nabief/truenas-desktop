@@ -39,7 +39,7 @@ VM_DIR     = os.environ.get('VM_DIR',  '/mnt/Truenas_Stockage/vms')
 ISO_DIR    = os.environ.get('ISO_DIR', '/mnt/Truenas_Stockage')
 
 # ── Version & mise à jour ─────────────────────────────────────────────────────
-APP_VERSION = '1.3.9'
+APP_VERSION = '1.4.0'
 APP_DIR     = os.environ.get('APP_DIR', '')  # dossier d'install (contient fileops.py, HTML…)
 GITHUB_RAW  = os.environ.get('GITHUB_RAW', 'https://raw.githubusercontent.com/Nabief/truenas-desktop/main').rstrip('/')
 
@@ -329,9 +329,12 @@ def _ensure_libvirt_apparmor_off():
     return 'CHANGED' in (out or '')
 
 
-# MDM-HOST-BOOTSTRAP-V1 : configuration du host pour la gestion des VMs, réalisée
-# automatiquement au premier démarrage via SSH+sudo (remplace setup-truenas-host.sh).
-# Idempotent. Permet une installation 100% interface web (aucun shell requis).
+# MDM-HOST-BOOTSTRAP-V2 : préparation du host pour la gestion des VMs, réalisée
+# automatiquement via SSH+sudo. NE MODIFIE PLUS /etc (ni drop-in systemd libvirtd,
+# ni règle polkit, ni 'systemctl enable') : ces écritures provoquaient un
+# « ordering cycle » systemd fatal sur TrueNAS 25.x (ix-etc/middlewared en échec).
+# libvirt est démarré À LA DEMANDE ; les anciennes modifs sont nettoyées.
+# Idempotent. Installation 100% interface web (aucun shell requis).
 _host_bootstrap_done = False
 
 
@@ -343,33 +346,27 @@ def _host_bootstrap():
         log.info('Host bootstrap ignoré (SSH non configuré).')
         return
     script = (
-        'set -e\n'
-        'mkdir -p /etc/systemd/system/libvirtd.service.d\n'
-        'cat > /etc/systemd/system/libvirtd.service.d/notimeout.conf <<\'EOF\'\n'
-        '[Service]\n'
-        'Environment=LIBVIRTD_ARGS=\n'
-        'EOF\n'
-        'mkdir -p /etc/polkit-1/rules.d\n'
-        'cat > /etc/polkit-1/rules.d/80-truenas-libvirt.rules <<EOF\n'
-        'polkit.addRule(function(action, subject) {\n'
-        '    if (action.id == "org.libvirt.unix.manage" && subject.user == "' + SSH_USER + '") {\n'
-        '        return polkit.Result.YES;\n'
-        '    }\n'
-        '});\n'
-        'EOF\n'
+        'set +e\n'
+        # -- Réparation : supprime les anciennes modifs /etc qui cassaient le boot 25.x --
+        'systemctl disable truenas-desktop 2>/dev/null || true\n'
+        'rm -f /etc/systemd/system/truenas-desktop.service\n'
+        'rm -f /etc/systemd/system/libvirtd.service.d/notimeout.conf\n'
+        'rmdir /etc/systemd/system/libvirtd.service.d 2>/dev/null || true\n'
+        'rm -f /etc/tmpfiles.d/truenas-libvirt.conf\n'
+        'rm -f /etc/polkit-1/rules.d/80-truenas-libvirt.rules\n'
         'systemctl daemon-reload 2>/dev/null || true\n'
+        # -- libvirt À LA DEMANDE : start seulement, jamais enable ni drop-in --
         'systemctl unmask libvirtd.socket libvirtd-ro.socket libvirtd-admin.socket 2>/dev/null || true\n'
-        'systemctl enable --now libvirtd 2>/dev/null || systemctl restart libvirtd 2>/dev/null || true\n'
+        'systemctl start libvirtd 2>/dev/null || systemctl start virtqemud 2>/dev/null || true\n'
         'for i in $(seq 1 15); do [ -S /run/libvirt/libvirt-sock ] && break; sleep 1; done\n'
         'virsh -c qemu:///system net-start default 2>/dev/null || true\n'
-        'virsh -c qemu:///system net-autostart default 2>/dev/null || true\n'
         'echo HOST_BOOTSTRAP_OK\n'
     )
     try:
         out, err, _code = ssh_exec("sudo -n sh -c " + shq(script), timeout=120)
         if 'HOST_BOOTSTRAP_OK' in (out or ''):
             _host_bootstrap_done = True
-            log.info('Host bootstrap OK (libvirtd/polkit/réseau default).')
+            log.info('Host bootstrap OK (libvirt à la demande + réseau default, sans modif /etc).')
         else:
             log.warning('Host bootstrap incomplet : %s', ((err or out) or '')[:200])
     except Exception as e:
