@@ -6594,7 +6594,8 @@ function openApp(id) {
     catalog:      loadCatalog,
     terminal:     loadTerminal,
     vms:          loadVMs,
-    libvirt:      loadLibvirt2
+    libvirt:      loadLibvirt2,
+    cron:         loadCron
   };
   if (loaders[id]) loaders[id]();
 }
@@ -7593,6 +7594,8 @@ var ALL_APPS = [
     imgStyle:'background:linear-gradient(135deg,#6366f1,#a855f7);', svg:'<svg viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,0.95)" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>' },
   { id:'vms',         label:'VMs TrueNAS (legacy)',  action:function(){ openApp('vms'); },
     imgClass:'icon-vm',       svg:'<svg viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,0.95)" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/><path d="M7 8l2 2-2 2M13 10h4"/></svg>' },
+  { id:'cron',        label:'Tâches planifiées',     action:function(){ openApp('cron'); },
+    imgStyle:'background:linear-gradient(135deg,#0ea5e9,#6366f1);', svg:'<svg viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,0.95)" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><polyline points="12 7 12 12 15 14"/></svg>' },
   { id:'libvirt',     label:'VMs QEMU/KVM',          action:function(){ openApp('libvirt'); },
     imgClass:'icon-vm',       svg:'<svg viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,0.95)" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/><circle cx="7" cy="8" r="1.5" fill="rgba(255,255,255,0.95)"/><circle cx="12" cy="8" r="1.5" fill="rgba(255,255,255,0.95)"/><circle cx="17" cy="8" r="1.5" fill="rgba(255,255,255,0.95)"/></svg>' },
 ];
@@ -8362,6 +8365,171 @@ async function serviceToggle(name, start) {
 async function serviceAutostart(id, enable) {
   try { await socketCall('/service/id/' + id, 'PUT', { enable: enable }); }
   catch(e) { toast('Err: ' + e.message); }
+}
+
+// ============================================================
+// CRON — Tâches planifiées (TrueNAS cronjob.* via middleware)
+// ============================================================
+var _cronJobs = [];
+
+async function loadCron() {
+  var el = document.getElementById('cron-content');
+  if (!el) return;
+  el.innerHTML = '<div class="fs-loading" style="height:200px;"><div class="spinner"></div></div>';
+  try {
+    _cronJobs = ensureArray(await socketCall('/cronjob'));
+    cronRenderList();
+  } catch (e) {
+    el.innerHTML = errHtml('Erreur : ' + e.message);
+  }
+}
+
+function cronEsc(s) {
+  return String(s == null ? '' : s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+function _cronP2(v) { return (/^\d+$/.test(String(v))) ? (Number(v) < 10 ? '0' + Number(v) : '' + v) : v; }
+function _cronDow(d) {
+  var n = {'0':'Dimanche','1':'Lundi','2':'Mardi','3':'Mercredi','4':'Jeudi','5':'Vendredi','6':'Samedi','7':'Dimanche'};
+  return n[String(d)] || ('jour ' + d);
+}
+function cronScheduleText(s) {
+  s = s || {};
+  var mi = s.minute != null ? s.minute : '*', h = s.hour != null ? s.hour : '*',
+      dom = s.dom != null ? s.dom : '*', mo = s.month != null ? s.month : '*', dow = s.dow != null ? s.dow : '*';
+  var cron = [mi, h, dom, mo, dow].join(' ');
+  var txt = cron;
+  if (cron === '* * * * *') txt = 'Chaque minute';
+  else if (h !== '*' && mi !== '*' && dom === '*' && mo === '*' && dow === '*') txt = 'Tous les jours à ' + _cronP2(h) + ':' + _cronP2(mi);
+  else if (mi !== '*' && h === '*' && dom === '*' && mo === '*' && dow === '*') txt = 'Toutes les heures (min ' + mi + ')';
+  else if (h !== '*' && mi !== '*' && dow !== '*' && dom === '*' && mo === '*') txt = _cronDow(dow) + ' à ' + _cronP2(h) + ':' + _cronP2(mi);
+  return '<strong>' + cronEsc(txt) + '</strong><div style="font-size:10px;color:var(--text-dim);font-family:monospace;">' + cronEsc(cron) + '</div>';
+}
+
+function cronRenderList() {
+  var el = document.getElementById('cron-content');
+  if (!el) return;
+  var h = '<div style="margin-bottom:12px;display:flex;gap:8px;">'
+    + '<button class="fs-btn" onclick="cronEditor(null)" style="background:rgba(62,207,142,0.15);border-color:rgba(62,207,142,0.3);color:var(--success);">＋ Nouvelle tâche</button>'
+    + '<button class="fs-btn" onclick="loadCron()">↻ Actualiser</button>'
+    + '</div>';
+  if (!_cronJobs.length) {
+    h += '<div class="empty-state" style="height:200px;"><div class="es-icon">⏱️</div><span>Aucune tâche planifiée</span></div>';
+    el.innerHTML = h; return;
+  }
+  h += '<table class="container-table"><thead><tr><th>Description</th><th>Commande</th><th>Planning</th><th>Utilisateur</th><th style="text-align:center;">Activée</th><th>Actions</th></tr></thead><tbody>';
+  _cronJobs.forEach(function(j) {
+    var cmdFull = j.command || '';
+    var cmd = cronEsc(cmdFull.length > 64 ? (cmdFull.slice(0, 64) + '…') : cmdFull);
+    h += '<tr>'
+      + '<td><strong>' + cronEsc(j.description || '(sans nom)') + '</strong></td>'
+      + '<td style="font-family:monospace;font-size:11px;" title="' + cronEsc(cmdFull) + '">' + cmd + '</td>'
+      + '<td>' + cronScheduleText(j.schedule) + '</td>'
+      + '<td>' + cronEsc(j.user || 'root') + '</td>'
+      + '<td style="text-align:center;"><input type="checkbox" ' + (j.enabled ? 'checked' : '') + ' onchange="cronToggle(' + j.id + ',this.checked)" style="width:14px;height:14px;cursor:pointer;"></td>'
+      + '<td style="white-space:nowrap;display:flex;gap:4px;">'
+      + '<button class="fs-btn" style="font-size:11px;padding:3px 9px;" onclick="cronRun(' + j.id + ')" title="Exécuter maintenant">▶</button>'
+      + '<button class="fs-btn" style="font-size:11px;padding:3px 9px;" onclick="cronEditor(' + j.id + ')" title="Modifier">✎</button>'
+      + '<button class="fs-btn" style="font-size:11px;padding:3px 9px;background:rgba(239,68,68,0.15);border-color:rgba(239,68,68,0.3);color:#f87171;" onclick="cronDelete(' + j.id + ')" title="Supprimer">🗑</button>'
+      + '</td></tr>';
+  });
+  h += '</tbody></table>';
+  el.innerHTML = h;
+}
+
+async function cronToggle(id, enabled) {
+  try { await socketCall('/cronjob/id/' + id, 'PUT', { enabled: !!enabled }); toast(enabled ? 'Tâche activée' : 'Tâche désactivée'); }
+  catch(e) { toast('Err: ' + e.message); loadCron(); }
+}
+async function cronRun(id) {
+  if (!await showConfirm('Exécuter cette tâche maintenant ?', { icon:'▶', ok:'Exécuter' })) return;
+  toast('Exécution lancée…');
+  try { await socketCall('/cronjob/id/' + id + '/run', 'POST'); toast('✅ Tâche exécutée'); }
+  catch(e) { toast('Err: ' + e.message); }
+}
+async function cronDelete(id) {
+  var j = _cronJobs.find(function(x){ return x.id === id; }) || {};
+  if (!await showConfirm('Supprimer la tâche <strong>' + cronEsc(j.description || '') + '</strong> ?', { danger:true, ok:'Supprimer', icon:'🗑' })) return;
+  try { await socketCall('/cronjob/id/' + id, 'DELETE'); toast('Tâche supprimée'); loadCron(); }
+  catch(e) { toast('Err: ' + e.message); }
+}
+
+var CRON_PRESETS = [
+  { label:'— Modèle de planning —', v:'' },
+  { label:'Chaque minute', v:'* * * * *' },
+  { label:'Toutes les heures (min 0)', v:'0 * * * *' },
+  { label:'Tous les jours à 00:00', v:'0 0 * * *' },
+  { label:'Tous les jours à 03:00', v:'0 3 * * *' },
+  { label:'Toutes les semaines (lundi 00:00)', v:'0 0 * * 1' },
+  { label:'Tous les mois (1er à 00:00)', v:'0 0 1 * *' }
+];
+
+function cronField(label, id, val, def) {
+  return '<div><label style="font-size:11px;color:var(--text-dim);display:block;margin-bottom:3px;">' + label + '</label>'
+    + '<input id="' + id + '" class="tnd-input" style="text-align:center;" value="' + cronEsc(val != null ? val : def) + '"></div>';
+}
+function cronEditor(id) {
+  var el = document.getElementById('cron-content');
+  if (!el) return;
+  var j = id != null ? (_cronJobs.find(function(x){ return x.id === id; }) || {}) : {};
+  var s = j.schedule || {};
+  var isNew = (id == null);
+  var opts = CRON_PRESETS.map(function(p){ return '<option value="' + p.v + '">' + p.label + '</option>'; }).join('');
+  var val = function(x, d){ return cronEsc(x != null ? x : d); };
+  el.innerHTML =
+    '<div style="max-width:640px;">'
+    + '<h3 style="margin:0 0 14px;">' + (isNew ? 'Nouvelle tâche planifiée' : 'Modifier la tâche') + '</h3>'
+    + '<input type="hidden" id="cron-id" value="' + (isNew ? '' : id) + '">'
+    + formRow('Description', '<input id="cron-desc" class="tnd-input" value="' + val(j.description, '') + '" placeholder="Ex : Sauvegarde nocturne">')
+    + formRow('Commande', '<input id="cron-cmd" class="tnd-input" style="font-family:monospace;" value="' + val(j.command, '') + '" placeholder="/mnt/pool/scripts/backup.sh">')
+    + formRow('Utilisateur', '<input id="cron-user" class="tnd-input" value="' + val(j.user, 'root') + '">')
+    + formRow('Modèle', '<select class="tnd-input" onchange="cronApplyPreset(this.value)">' + opts + '</select>')
+    + '<div style="display:grid;grid-template-columns:repeat(5,1fr);gap:8px;margin:6px 0 12px;">'
+      + cronField('Minute', 'cron-min', s.minute, '0')
+      + cronField('Heure', 'cron-hour', s.hour, '*')
+      + cronField('Jour (mois)', 'cron-dom', s.dom, '*')
+      + cronField('Mois', 'cron-month', s.month, '*')
+      + cronField('Jour (sem.)', 'cron-dow', s.dow, '*')
+    + '</div>'
+    + '<label class="tnd-switch" style="display:flex;justify-content:space-between;gap:10px;margin-bottom:8px;"><span>Activée</span><input type="checkbox" id="cron-enabled" ' + ((isNew || j.enabled) ? 'checked' : '') + '></label>'
+    + '<label class="tnd-switch" style="display:flex;justify-content:space-between;gap:10px;margin-bottom:8px;"><span>Masquer la sortie standard (stdout)</span><input type="checkbox" id="cron-stdout" ' + ((isNew || j.stdout) ? 'checked' : '') + '></label>'
+    + '<label class="tnd-switch" style="display:flex;justify-content:space-between;gap:10px;margin-bottom:14px;"><span>Masquer les erreurs (stderr)</span><input type="checkbox" id="cron-stderr" ' + (j.stderr ? 'checked' : '') + '></label>'
+    + '<div style="display:flex;gap:8px;justify-content:flex-end;">'
+      + '<button class="fs-btn" onclick="loadCron()">Annuler</button>'
+      + '<button class="fs-btn" style="background:rgba(62,207,142,0.15);border-color:rgba(62,207,142,0.3);color:var(--success);" onclick="cronSave()">Enregistrer</button>'
+    + '</div></div>';
+}
+function cronApplyPreset(v) {
+  if (!v) return;
+  var p = v.split(/\s+/);
+  ['cron-min','cron-hour','cron-dom','cron-month','cron-dow'].forEach(function(cid, i){
+    var e = document.getElementById(cid); if (e) e.value = p[i] || '*';
+  });
+}
+async function cronSave() {
+  var idv = document.getElementById('cron-id').value;
+  var cmd = document.getElementById('cron-cmd').value.trim();
+  if (!cmd) { toast('La commande est obligatoire'); return; }
+  var payload = {
+    command: cmd,
+    description: document.getElementById('cron-desc').value.trim(),
+    user: document.getElementById('cron-user').value.trim() || 'root',
+    enabled: document.getElementById('cron-enabled').checked,
+    stdout: document.getElementById('cron-stdout').checked,
+    stderr: document.getElementById('cron-stderr').checked,
+    schedule: {
+      minute: document.getElementById('cron-min').value.trim() || '*',
+      hour:   document.getElementById('cron-hour').value.trim() || '*',
+      dom:    document.getElementById('cron-dom').value.trim() || '*',
+      month:  document.getElementById('cron-month').value.trim() || '*',
+      dow:    document.getElementById('cron-dow').value.trim() || '*'
+    }
+  };
+  try {
+    if (idv) await socketCall('/cronjob/id/' + idv, 'PUT', payload);
+    else await socketCall('/cronjob', 'POST', payload);
+    toast('✅ Tâche enregistrée');
+    loadCron();
+  } catch(e) { toast('Err: ' + e.message); }
 }
 
 // ============================================================
@@ -12610,6 +12778,21 @@ if (typeof renderLibvirt2Detail === 'function' && !window._lv2DetailTabsWrapped)
     <div id="services-content"><div class="fs-loading" style="height:200px;"><div class="spinner"></div></div></div>
   </div>
   <div class="resize-handle" data-win="services"></div>
+</div>
+
+<div class="window panel-win" id="win-cron" style="top:70px;left:230px;width:780px;height:530px;">
+  <div class="window-titlebar" data-win="cron">
+    <span class="window-icon">⏱️</span>
+    <span class="window-title">Tâches planifiées (Cron)</span>
+    <div class="window-controls">
+      <button class="win-btn min" onclick="minimizeWin('cron')"></button>
+      <button class="win-btn max" onclick="toggleMaxWin('cron')"></button>
+      <button class="win-btn cls" onclick="closeWin('cron')"></button>
+    </div></div>
+  <div class="window-body">
+    <div id="cron-content"><div class="fs-loading" style="height:200px;"><div class="spinner"></div></div></div>
+  </div>
+  <div class="resize-handle" data-win="cron"></div>
 </div>
 
 <!-- ══════════════════════════════════════════════════
