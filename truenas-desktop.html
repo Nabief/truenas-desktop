@@ -6595,7 +6595,8 @@ function openApp(id) {
     terminal:     loadTerminal,
     vms:          loadVMs,
     libvirt:      loadLibvirt2,
-    cron:         loadCron
+    cron:         loadCron,
+    webview:      loadWebview
   };
   if (loaders[id]) loaders[id]();
 }
@@ -7596,6 +7597,8 @@ var ALL_APPS = [
     imgClass:'icon-vm',       svg:'<svg viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,0.95)" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/><path d="M7 8l2 2-2 2M13 10h4"/></svg>' },
   { id:'cron',        label:'Tâches planifiées',     action:function(){ openApp('cron'); },
     imgStyle:'background:linear-gradient(135deg,#0ea5e9,#6366f1);', svg:'<svg viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,0.95)" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><polyline points="12 7 12 12 15 14"/></svg>' },
+  { id:'webview',     label:'Navigateur interne',    action:function(){ openApp('webview'); },
+    imgStyle:'background:linear-gradient(135deg,#0ea5e9,#22c55e);', svg:'<svg viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,0.95)" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><line x1="3" y1="12" x2="21" y2="12"/><path d="M12 3a15 15 0 0 1 0 18 15 15 0 0 1 0-18z"/></svg>' },
   { id:'libvirt',     label:'VMs QEMU/KVM',          action:function(){ openApp('libvirt'); },
     imgClass:'icon-vm',       svg:'<svg viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,0.95)" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/><circle cx="7" cy="8" r="1.5" fill="rgba(255,255,255,0.95)"/><circle cx="12" cy="8" r="1.5" fill="rgba(255,255,255,0.95)"/><circle cx="17" cy="8" r="1.5" fill="rgba(255,255,255,0.95)"/></svg>' },
 ];
@@ -8530,6 +8533,118 @@ async function cronSave() {
     toast('✅ Tâche enregistrée');
     loadCron();
   } catch(e) { toast('Err: ' + e.message); }
+}
+
+// ============================================================
+// NAVIGATEUR INTERNE — hub services auto-hébergés (iframe + favoris)
+// ============================================================
+var _wv = { hist: [], idx: -1 };
+var _wvBookmarks = [];
+var _wvAuto = [];
+
+function wvEsc(s) {
+  return String(s == null ? '' : s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+function wvNormalizeUrl(u) {
+  u = (u || '').trim();
+  if (!u) return '';
+  if (!/^[a-zA-Z][a-zA-Z0-9+.\-]*:\/\//.test(u)) u = 'https://' + u;
+  return u;
+}
+function wvLoadBookmarks() {
+  try { _wvBookmarks = JSON.parse(localStorage.getItem('webview_bookmarks') || 'null') || []; }
+  catch(_) { _wvBookmarks = []; }
+}
+function wvSaveBookmarks() {
+  try { localStorage.setItem('webview_bookmarks', JSON.stringify(_wvBookmarks)); } catch(_) {}
+}
+
+async function loadWebview() {
+  wvLoadBookmarks();
+  _wvAuto = [{ name:'Interface TrueNAS', url:'https://' + webSiteHost() }];
+  try {
+    var r = await fileops('GET', 'websites');
+    var sites = (r && r.sites) || [];
+    sites.forEach(function(s){ _wvAuto.push({ name: (s.server_name || ('Site :' + s.port)), url: webUrl(s) }); });
+  } catch(_) {}
+  wvRenderBookmarks();
+  var f = document.getElementById('wv-frame');
+  if (f && !f.getAttribute('src')) wvHome();
+}
+
+function wvRenderBookmarks() {
+  var el = document.getElementById('wv-bookmarks');
+  if (!el) return;
+  var h = '';
+  _wvAuto.forEach(function(b, i){
+    h += '<button class="fs-btn" style="font-size:11px;padding:3px 9px;" title="' + wvEsc(b.url) + '" onclick="wvGoAuto(' + i + ')">🔗 ' + wvEsc(b.name) + '</button>';
+  });
+  _wvBookmarks.forEach(function(b, i){
+    h += '<span style="display:inline-flex;align-items:center;">'
+      + '<button class="fs-btn" style="font-size:11px;padding:3px 9px;" title="' + wvEsc(b.url) + '" onclick="wvGoBookmark(' + i + ')">★ ' + wvEsc(b.name) + '</button>'
+      + '<button class="fs-btn" style="font-size:11px;padding:3px 6px;color:#f87171;" title="Retirer ce favori" onclick="wvDelBookmark(' + i + ')">×</button>'
+      + '</span>';
+  });
+  if (!h) h = '<span style="font-size:12px;color:var(--text-dim);">Aucun favori. Saisis une adresse puis clique ★.</span>';
+  el.innerHTML = h;
+}
+function wvGoAuto(i) { var b = _wvAuto[i]; if (b) wvGo(b.url); }
+function wvGoBookmark(i) { var b = _wvBookmarks[i]; if (b) wvGo(b.url); }
+
+function wvSetHint(html) {
+  var h = document.getElementById('wv-hint');
+  if (!h) return;
+  if (!html) { h.style.display = 'none'; h.innerHTML = ''; return; }
+  h.innerHTML = html + ' <a href="#" onclick="wvOpenTab();return false;" style="color:var(--accent2);text-decoration:underline;">Ouvrir dans un onglet ⧉</a>';
+  h.style.display = 'block';
+}
+function _wvApply(url) {
+  var input = document.getElementById('wv-url');
+  if (input) input.value = url;
+  wvSetHint('');
+  if (window.location.protocol === 'https:' && /^http:\/\//i.test(url)) {
+    wvSetHint('Ce service est en HTTP alors que le Bureau est en HTTPS : l\'affichage intégré sera bloqué (contenu mixte).');
+  }
+  var f = document.getElementById('wv-frame');
+  if (f) f.src = url;
+}
+function wvGo(url) {
+  url = wvNormalizeUrl(url);
+  if (!url) return;
+  if (_wv.hist[_wv.idx] !== url) {
+    if (_wv.idx < _wv.hist.length - 1) _wv.hist = _wv.hist.slice(0, _wv.idx + 1);
+    _wv.hist.push(url);
+    _wv.idx = _wv.hist.length - 1;
+  }
+  _wvApply(url);
+}
+function wvBack() { if (_wv.idx > 0) { _wv.idx--; _wvApply(_wv.hist[_wv.idx]); } }
+function wvForward() { if (_wv.idx < _wv.hist.length - 1) { _wv.idx++; _wvApply(_wv.hist[_wv.idx]); } }
+function wvReload() { var f = document.getElementById('wv-frame'); if (f && f.src) { f.src = f.src; } }
+function wvHome() {
+  var home = (_wvAuto[0] && _wvAuto[0].url) || ('https://' + webSiteHost());
+  wvGo(home);
+}
+function wvOpenTab() {
+  var input = document.getElementById('wv-url');
+  var url = wvNormalizeUrl((input && input.value) || _wv.hist[_wv.idx] || '');
+  if (url) window.open(url, '_blank', 'noopener');
+}
+async function wvAddBookmark() {
+  var input = document.getElementById('wv-url');
+  var url = wvNormalizeUrl((input && input.value) || '');
+  if (!url) { toast('Aucune adresse à ajouter'); return; }
+  var name = await showPrompt('Nom du favori :', url.replace(/^https?:\/\//, ''));
+  if (name === null || name === undefined) return;
+  _wvBookmarks.push({ name: (String(name).trim() || url), url: url });
+  wvSaveBookmarks();
+  wvRenderBookmarks();
+  toast('★ Favori ajouté');
+}
+function wvDelBookmark(i) {
+  _wvBookmarks.splice(i, 1);
+  wvSaveBookmarks();
+  wvRenderBookmarks();
 }
 
 // ============================================================
@@ -12793,6 +12908,35 @@ if (typeof renderLibvirt2Detail === 'function' && !window._lv2DetailTabsWrapped)
     <div id="cron-content"><div class="fs-loading" style="height:200px;"><div class="spinner"></div></div></div>
   </div>
   <div class="resize-handle" data-win="cron"></div>
+</div>
+
+<div class="window panel-win" id="win-webview" style="top:55px;left:170px;width:940px;height:620px;">
+  <div class="window-titlebar" data-win="webview">
+    <span class="window-icon">🌐</span>
+    <span class="window-title">Navigateur interne</span>
+    <div class="window-controls">
+      <button class="win-btn min" onclick="minimizeWin('webview')"></button>
+      <button class="win-btn max" onclick="toggleMaxWin('webview')"></button>
+      <button class="win-btn cls" onclick="closeWin('webview')"></button>
+    </div></div>
+  <div class="window-body" style="display:flex;flex-direction:column;padding:0;">
+    <div style="display:flex;gap:6px;align-items:center;padding:8px 10px;border-bottom:1px solid rgba(255,255,255,0.08);">
+      <button class="fs-btn" onclick="wvBack()" title="Précédent" style="padding:4px 10px;">‹</button>
+      <button class="fs-btn" onclick="wvForward()" title="Suivant" style="padding:4px 10px;">›</button>
+      <button class="fs-btn" onclick="wvReload()" title="Recharger" style="padding:4px 10px;">↻</button>
+      <button class="fs-btn" onclick="wvHome()" title="Accueil" style="padding:4px 10px;">⌂</button>
+      <input id="wv-url" class="tnd-input" style="flex:1;" placeholder="https://…  ou adresse d'un service" onkeydown="if(event.key==='Enter'){wvGo(this.value);}">
+      <button class="fs-btn" onclick="wvGo(document.getElementById('wv-url').value)" title="Aller">Aller</button>
+      <button class="fs-btn" onclick="wvAddBookmark()" title="Ajouter aux favoris" style="padding:4px 10px;">★</button>
+      <button class="fs-btn" onclick="wvOpenTab()" title="Ouvrir dans un vrai onglet du navigateur" style="padding:4px 10px;">⧉</button>
+    </div>
+    <div id="wv-bookmarks" style="display:flex;flex-wrap:wrap;gap:6px;padding:8px 10px;border-bottom:1px solid rgba(255,255,255,0.06);max-height:84px;overflow:auto;"></div>
+    <div id="wv-hint" style="display:none;padding:8px 12px;background:rgba(234,179,8,0.12);border-bottom:1px solid rgba(234,179,8,0.3);font-size:12px;color:#eab308;"></div>
+    <div style="flex:1;position:relative;background:#fff;">
+      <iframe id="wv-frame" style="width:100%;height:100%;border:0;display:block;background:#fff;" referrerpolicy="no-referrer"></iframe>
+    </div>
+  </div>
+  <div class="resize-handle" data-win="webview"></div>
 </div>
 
 <!-- ══════════════════════════════════════════════════
