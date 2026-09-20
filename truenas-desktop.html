@@ -6595,7 +6595,8 @@ function openApp(id) {
     terminal:     loadTerminal,
     vms:          loadVMs,
     libvirt:      loadLibvirt2,
-    cron:         loadCron
+    cron:         loadCron,
+    bootenv:      loadBootenv
   };
   if (loaders[id]) loaders[id]();
 }
@@ -7596,6 +7597,8 @@ var ALL_APPS = [
     imgClass:'icon-vm',       svg:'<svg viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,0.95)" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/><path d="M7 8l2 2-2 2M13 10h4"/></svg>' },
   { id:'cron',        label:'Tâches planifiées',     action:function(){ openApp('cron'); },
     imgStyle:'background:linear-gradient(135deg,#0ea5e9,#6366f1);', svg:'<svg viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,0.95)" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><polyline points="12 7 12 12 15 14"/></svg>' },
+  { id:'bootenv',     label:'Boot Environments',     action:function(){ openApp('bootenv'); },
+    imgStyle:'background:linear-gradient(135deg,#f59e0b,#ef4444);', svg:'<svg viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,0.95)" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><polyline points="9 12 11 14 15 10"/></svg>' },
   { id:'libvirt',     label:'VMs QEMU/KVM',          action:function(){ openApp('libvirt'); },
     imgClass:'icon-vm',       svg:'<svg viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,0.95)" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/><circle cx="7" cy="8" r="1.5" fill="rgba(255,255,255,0.95)"/><circle cx="12" cy="8" r="1.5" fill="rgba(255,255,255,0.95)"/><circle cx="17" cy="8" r="1.5" fill="rgba(255,255,255,0.95)"/></svg>' },
 ];
@@ -8530,6 +8533,180 @@ async function cronSave() {
     toast('✅ Tâche enregistrée');
     loadCron();
   } catch(e) { toast('Err: ' + e.message); }
+}
+
+// ============================================================
+// BOOT ENVIRONMENTS — boot.environment.* (fallback bootenv.*)
+// ============================================================
+var _beList = [];
+var _beNS = null; // 'new' | 'legacy'
+
+function beEsc(s) {
+  return String(s == null ? '' : s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+function beFmtDate(v) {
+  if (v == null || v === '') return '—';
+  var d;
+  if (typeof v === 'number') d = new Date(v < 1e12 ? v * 1000 : v);
+  else if (typeof v === 'object' && v.$date) d = new Date(v.$date);
+  else d = new Date(v);
+  if (isNaN(d.getTime())) return String(v);
+  return d.toLocaleString('fr-FR');
+}
+function beFmtSize(b) {
+  if (b.used && typeof b.used === 'string') return b.used;
+  var n = b.used_bytes;
+  if (typeof n !== 'number' || !isFinite(n)) return '—';
+  var u = ['o','Ko','Mo','Go','To'], i = 0;
+  while (n >= 1024 && i < u.length - 1) { n /= 1024; i++; }
+  return (Math.round(n * 10) / 10) + ' ' + u[i];
+}
+function beNormalizeLegacy(b) {
+  var act = String(b.active || '');
+  return {
+    id: b.id || b.name || b.realname,
+    active: act.indexOf('N') >= 0,
+    activated: act.indexOf('R') >= 0,
+    created: (b.created && b.created.$date) ? b.created.$date : b.created,
+    used: b.space || b.rawspace || '',
+    keep: !!b.keep,
+    can_activate: b.can_activate !== false
+  };
+}
+function _beIsMissing(msg) {
+  return /not.*(found|registered)|unknown method|does not exist|no method/i.test(msg || '');
+}
+
+async function beQuery() {
+  if (_beNS === 'legacy') return ensureArray(await wsCall('bootenv.query', [[], {}], 60000)).map(beNormalizeLegacy);
+  try {
+    var r = await wsCall('boot.environment.query', [[], {}], 60000);
+    _beNS = 'new';
+    return ensureArray(r);
+  } catch (e) {
+    if (_beIsMissing(e.message)) {
+      var r2 = ensureArray(await wsCall('bootenv.query', [[], {}], 60000));
+      _beNS = 'legacy';
+      return r2.map(beNormalizeLegacy);
+    }
+    throw e;
+  }
+}
+function beActivate(id) {
+  if (_beNS === 'legacy') return wsCall('bootenv.activate', [id], 60000);
+  return wsCall('boot.environment.activate', [{ id: id }], 60000);
+}
+function beClone(source, target) {
+  if (_beNS === 'legacy') return wsCall('bootenv.create', [{ name: target, source: source }], 120000);
+  return wsCall('boot.environment.clone', [{ id: source, target: target }], 120000);
+}
+function beDestroy(id) {
+  if (_beNS === 'legacy') return wsCall('bootenv.delete', [id], 120000);
+  return wsCall('boot.environment.destroy', [{ id: id }], 120000);
+}
+function beKeep(id, value) {
+  if (_beNS === 'legacy') return wsCall('bootenv.set_attribute', [id, { keep: !!value }], 60000);
+  return wsCall('boot.environment.keep', [{ id: id, value: !!value }], 60000);
+}
+
+async function loadBootenv() {
+  var el = document.getElementById('bootenv-content');
+  if (!el) return;
+  el.innerHTML = '<div class="fs-loading" style="height:200px;"><div class="spinner"></div></div>';
+  try {
+    _beList = await beQuery();
+    beRenderList();
+  } catch (e) {
+    el.innerHTML = errHtml('Erreur : ' + e.message);
+  }
+}
+
+function beRenderList() {
+  var el = document.getElementById('bootenv-content');
+  if (!el) return;
+  var h = '<div style="background:rgba(59,130,246,0.10);border:1px solid rgba(59,130,246,0.25);border-radius:8px;padding:8px 12px;margin-bottom:12px;font-size:12px;color:var(--text);">'
+    + '💡 <strong>Astuce</strong> : clonez l\'environnement actuel <em>avant</em> chaque mise à jour TrueNAS. En cas de souci de démarrage, réactivez l\'ancien en un clic — sans passer par le menu GRUB.</div>';
+  h += '<div style="margin-bottom:12px;display:flex;gap:8px;">'
+    + '<button class="fs-btn" onclick="beCloneCurrent()" style="background:rgba(62,207,142,0.15);border-color:rgba(62,207,142,0.3);color:var(--success);">＋ Cloner l\'environnement actuel</button>'
+    + '<button class="fs-btn" onclick="loadBootenv()">↻ Actualiser</button></div>';
+  if (!_beList.length) {
+    h += '<div class="empty-state" style="height:160px;"><div class="es-icon">🛡️</div><span>Aucun environnement de démarrage</span></div>';
+    el.innerHTML = h; return;
+  }
+  h += '<table class="container-table"><thead><tr><th>Nom</th><th>Statut</th><th>Créé</th><th>Taille</th><th style="text-align:center;">Conservé</th><th>Actions</th></tr></thead><tbody>';
+  _beList.forEach(function(b, i) {
+    var badges = '';
+    if (b.active) badges += '<span style="display:inline-block;background:rgba(62,207,142,0.18);color:var(--success);border-radius:10px;padding:1px 8px;font-size:10px;margin-right:4px;">● En cours</span>';
+    if (b.activated) badges += '<span style="display:inline-block;background:rgba(59,130,246,0.18);color:#60a5fa;border-radius:10px;padding:1px 8px;font-size:10px;">↻ Au prochain boot</span>';
+    if (!badges) badges = '<span style="color:var(--text-dim);font-size:11px;">—</span>';
+    var locked = b.active || b.activated;
+    h += '<tr>'
+      + '<td><strong>' + beEsc(b.id) + '</strong></td>'
+      + '<td>' + badges + '</td>'
+      + '<td style="font-size:11px;">' + beEsc(beFmtDate(b.created)) + '</td>'
+      + '<td style="font-size:11px;">' + beEsc(beFmtSize(b)) + '</td>'
+      + '<td style="text-align:center;"><input type="checkbox" ' + (b.keep ? 'checked' : '') + ' onchange="beToggleKeep(' + i + ',this.checked)" style="width:14px;height:14px;cursor:pointer;" title="Protéger de la suppression automatique par le programme de mise à jour"></td>'
+      + '<td style="white-space:nowrap;display:flex;gap:4px;">';
+    if (b.can_activate !== false && !b.activated) {
+      h += '<button class="fs-btn" style="font-size:11px;padding:3px 9px;" onclick="beDoActivate(' + i + ')" title="Activer au prochain démarrage">✔ Activer</button>';
+    }
+    h += '<button class="fs-btn" style="font-size:11px;padding:3px 9px;" onclick="beDoClone(' + i + ')" title="Cloner cet environnement">⧉ Cloner</button>';
+    if (locked) {
+      h += '<button class="fs-btn" style="font-size:11px;padding:3px 9px;opacity:0.4;cursor:not-allowed;" title="Impossible de supprimer l\'environnement actif ou activé au prochain boot" disabled>🗑</button>';
+    } else {
+      h += '<button class="fs-btn" style="font-size:11px;padding:3px 9px;background:rgba(239,68,68,0.15);border-color:rgba(239,68,68,0.3);color:#f87171;" onclick="beDoDelete(' + i + ')" title="Supprimer">🗑</button>';
+    }
+    h += '</td></tr>';
+  });
+  h += '</tbody></table>';
+  el.innerHTML = h;
+}
+
+function _beAt(i) { return _beList[i] || {}; }
+
+async function beDoActivate(i) {
+  var b = _beAt(i);
+  if (!b.id) return;
+  if (!await showConfirm('Activer <strong>' + beEsc(b.id) + '</strong> au prochain démarrage ?<br><span style="font-size:11px;color:var(--text-dim);">Le système continue sur l\'environnement actuel jusqu\'au redémarrage.</span>', { icon:'✔', ok:'Activer' })) return;
+  try { await beActivate(b.id); toast('✅ Activé au prochain démarrage'); loadBootenv(); }
+  catch(e) { toast('Err: ' + e.message); }
+}
+function beSuggestName() {
+  var d = new Date();
+  function p(n) { return n < 10 ? '0' + n : '' + n; }
+  return 'be-' + d.getFullYear() + p(d.getMonth() + 1) + p(d.getDate()) + '-' + p(d.getHours()) + p(d.getMinutes());
+}
+async function beClonePrompt(source) {
+  if (!source) { toast('Aucun environnement source'); return; }
+  var target = await showPrompt('Nom du nouvel environnement (clone de ' + source + ') :', beSuggestName());
+  if (target === null || target === undefined) return;
+  target = String(target).trim();
+  if (!target) { toast('Nom requis'); return; }
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(target)) { toast('Nom invalide (lettres, chiffres, . _ -)'); return; }
+  toast('Clonage en cours…');
+  try { await beClone(source, target); toast('✅ Environnement cloné : ' + target); loadBootenv(); }
+  catch(e) { toast('Err: ' + e.message); }
+}
+async function beDoClone(i) {
+  var b = _beAt(i);
+  if (b.id) await beClonePrompt(b.id);
+}
+async function beCloneCurrent() {
+  var cur = _beList.find(function(x){ return x.active; });
+  await beClonePrompt(cur ? cur.id : (_beList[0] && _beList[0].id));
+}
+async function beDoDelete(i) {
+  var b = _beAt(i);
+  if (!b.id) return;
+  if (!await showConfirm('Supprimer définitivement l\'environnement <strong>' + beEsc(b.id) + '</strong> ?', { danger:true, ok:'Supprimer', icon:'🗑' })) return;
+  try { await beDestroy(b.id); toast('Environnement supprimé'); loadBootenv(); }
+  catch(e) { toast('Err: ' + e.message); }
+}
+async function beToggleKeep(i, value) {
+  var b = _beAt(i);
+  if (!b.id) return;
+  try { await beKeep(b.id, value); toast(value ? '🔒 Conservation activée' : 'Conservation désactivée'); b.keep = value; }
+  catch(e) { toast('Err: ' + e.message); loadBootenv(); }
 }
 
 // ============================================================
@@ -12793,6 +12970,21 @@ if (typeof renderLibvirt2Detail === 'function' && !window._lv2DetailTabsWrapped)
     <div id="cron-content"><div class="fs-loading" style="height:200px;"><div class="spinner"></div></div></div>
   </div>
   <div class="resize-handle" data-win="cron"></div>
+</div>
+
+<div class="window panel-win" id="win-bootenv" style="top:65px;left:200px;width:820px;height:540px;">
+  <div class="window-titlebar" data-win="bootenv">
+    <span class="window-icon">🛡️</span>
+    <span class="window-title">Boot Environments</span>
+    <div class="window-controls">
+      <button class="win-btn min" onclick="minimizeWin('bootenv')"></button>
+      <button class="win-btn max" onclick="toggleMaxWin('bootenv')"></button>
+      <button class="win-btn cls" onclick="closeWin('bootenv')"></button>
+    </div></div>
+  <div class="window-body">
+    <div id="bootenv-content"><div class="fs-loading" style="height:200px;"><div class="spinner"></div></div></div>
+  </div>
+  <div class="resize-handle" data-win="bootenv"></div>
 </div>
 
 <!-- ══════════════════════════════════════════════════
