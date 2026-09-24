@@ -6596,7 +6596,8 @@ function openApp(id) {
     vms:          loadVMs,
     libvirt:      loadLibvirt2,
     cron:         loadCron,
-    bootenv:      loadBootenv
+    bootenv:      loadBootenv,
+    snapshots:    loadSnapshots
   };
   if (loaders[id]) loaders[id]();
 }
@@ -7599,6 +7600,8 @@ var ALL_APPS = [
     imgStyle:'background:linear-gradient(135deg,#0ea5e9,#6366f1);', svg:'<svg viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,0.95)" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><polyline points="12 7 12 12 15 14"/></svg>' },
   { id:'bootenv',     label:'Boot Environments',     action:function(){ openApp('bootenv'); },
     imgStyle:'background:linear-gradient(135deg,#f59e0b,#ef4444);', svg:'<svg viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,0.95)" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><polyline points="9 12 11 14 15 10"/></svg>' },
+  { id:'snapshots',   label:'Snapshots ZFS',         action:function(){ openApp('snapshots'); },
+    imgStyle:'background:linear-gradient(135deg,#8b5cf6,#06b6d4);', svg:'<svg viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,0.95)" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 3a9 9 0 0 1 0 18"/><path d="M12 8v4l3 2"/></svg>' },
   { id:'libvirt',     label:'VMs QEMU/KVM',          action:function(){ openApp('libvirt'); },
     imgClass:'icon-vm',       svg:'<svg viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,0.95)" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/><circle cx="7" cy="8" r="1.5" fill="rgba(255,255,255,0.95)"/><circle cx="12" cy="8" r="1.5" fill="rgba(255,255,255,0.95)"/><circle cx="17" cy="8" r="1.5" fill="rgba(255,255,255,0.95)"/></svg>' },
 ];
@@ -8707,6 +8710,322 @@ async function beToggleKeep(i, value) {
   if (!b.id) return;
   try { await beKeep(b.id, value); toast(value ? '🔒 Conservation activée' : 'Conservation désactivée'); b.keep = value; }
   catch(e) { toast('Err: ' + e.message); loadBootenv(); }
+}
+
+// ============================================================
+// SNAPSHOTS ZFS — pool.snapshot.* + pool.snapshottask.* (v26.0)
+// ============================================================
+var _snapTab = 'snaps';
+var _snapList = [];
+var _snapTasks = [];
+var _snapDatasets = [];
+var _snapFilter = '';
+var _snapTruncated = false;
+var SNAP_TAB_ACTIVE = 'background:rgba(62,207,142,0.15);border-color:rgba(62,207,142,0.3);color:var(--success);';
+var SNAP_UNITS = [['HOUR','heure(s)'],['DAY','jour(s)'],['WEEK','semaine(s)'],['MONTH','mois'],['YEAR','année(s)']];
+
+function snapEsc(s) { return String(s == null ? '' : s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+function snapProp(p) { if (p == null) return null; if (typeof p === 'object') return (p.value != null ? p.value : (p.rawvalue != null ? p.rawvalue : null)); return p; }
+function snapPropRaw(p) { if (p == null) return null; if (typeof p === 'object') return (p.rawvalue != null ? p.rawvalue : p.value); return p; }
+function snapFmtDate(props) {
+  if (!props || !props.creation) return '—';
+  var raw = snapPropRaw(props.creation);
+  if (raw == null) return '—';
+  var n = Number(raw);
+  if (!isFinite(n)) return String(raw);
+  var d = new Date(n * 1000);
+  return isNaN(d.getTime()) ? String(raw) : d.toLocaleString('fr-FR');
+}
+function snapFmtSize(props, key) {
+  if (!props || !props[key]) return '—';
+  var v = snapProp(props[key]);
+  return v == null ? '—' : String(v);
+}
+function _snapFlattenDs(list, out) {
+  (list || []).forEach(function(d) {
+    if (d && (d.id || d.name)) out.push(d.id || d.name);
+    if (d && d.children && d.children.length) _snapFlattenDs(d.children, out);
+  });
+  return out;
+}
+function snapUnitLabel(u) { for (var k = 0; k < SNAP_UNITS.length; k++) { if (SNAP_UNITS[k][0] === u) return SNAP_UNITS[k][1]; } return u || ''; }
+
+async function loadSnapshots() {
+  var el = document.getElementById('snapshots-content');
+  if (!el) return;
+  el.innerHTML =
+    '<div style="display:flex;gap:4px;margin-bottom:12px;">'
+    + '<button class="fs-btn" onclick="snapSetTab(\'snaps\')" style="' + (_snapTab === 'snaps' ? SNAP_TAB_ACTIVE : '') + '">📸 Snapshots</button>'
+    + '<button class="fs-btn" onclick="snapSetTab(\'tasks\')" style="' + (_snapTab === 'tasks' ? SNAP_TAB_ACTIVE : '') + '">🗓️ Tâches périodiques</button>'
+    + '</div><div id="snap-body"><div class="fs-loading" style="height:180px;"><div class="spinner"></div></div></div>';
+  try {
+    if (!_snapDatasets.length) {
+      var ds = ensureArray(await wsCall('pool.dataset.query', [[], {}], 60000));
+      var out = [];
+      _snapFlattenDs(ds, out);
+      _snapDatasets = out.filter(function(v, i, a) { return v && a.indexOf(v) === i; }).sort();
+    }
+    if (_snapTab === 'snaps') await snapLoadSnaps(); else await snapLoadTasks();
+  } catch (e) {
+    var b = document.getElementById('snap-body');
+    if (b) b.innerHTML = errHtml('Erreur : ' + e.message);
+  }
+}
+function snapSetTab(t) { _snapTab = t; loadSnapshots(); }
+function _snapAt(i) { return _snapList[i] || {}; }
+
+async function snapLoadSnaps() {
+  var b = document.getElementById('snap-body');
+  if (!b) return;
+  b.innerHTML = '<div class="fs-loading" style="height:180px;"><div class="spinner"></div></div>';
+  var filters = _snapFilter ? [['dataset', '=', _snapFilter]] : [];
+  var opts = { extra: { properties: ['creation', 'used', 'referenced'] } };
+  if (!_snapFilter) opts.limit = 2000;
+  var r = ensureArray(await wsCall('pool.snapshot.query', [filters, opts], 120000));
+  _snapTruncated = (!_snapFilter && r.length >= 2000);
+  _snapList = r;
+  snapRenderSnaps();
+}
+function snapSetFilter(v) { _snapFilter = v; snapLoadSnaps(); }
+function snapRenderSnaps() {
+  var b = document.getElementById('snap-body');
+  if (!b) return;
+  var dsOpts = '<option value="">Tous les datasets</option>' + _snapDatasets.map(function(d) {
+    return '<option value="' + snapEsc(d) + '"' + (_snapFilter === d ? ' selected' : '') + '>' + snapEsc(d) + '</option>';
+  }).join('');
+  var h = '<div style="margin-bottom:12px;display:flex;gap:8px;align-items:center;flex-wrap:wrap;">'
+    + '<button class="fs-btn" onclick="snapCreateForm()" style="background:rgba(62,207,142,0.15);border-color:rgba(62,207,142,0.3);color:var(--success);">＋ Créer un snapshot</button>'
+    + '<button class="fs-btn" onclick="snapLoadSnaps()">↻ Actualiser</button>'
+    + '<span style="margin-left:auto;font-size:11px;color:var(--text-dim);">Dataset :</span>'
+    + '<select class="tnd-input" style="max-width:300px;" onchange="snapSetFilter(this.value)">' + dsOpts + '</select>'
+    + '</div>';
+  if (!_snapList.length) {
+    h += '<div class="empty-state" style="height:160px;"><div class="es-icon">📸</div><span>Aucun snapshot' + (_snapFilter ? ' pour ce dataset' : '') + '</span></div>';
+    b.innerHTML = h; return;
+  }
+  if (_snapTruncated) h += '<div style="font-size:11px;color:#eab308;margin-bottom:8px;">Affichage limité aux 2000 premiers — filtre par dataset pour affiner.</div>';
+  h += '<table class="container-table"><thead><tr><th>Dataset</th><th>Snapshot</th><th>Créé</th><th>Utilisé</th><th>Référencé</th><th>Actions</th></tr></thead><tbody>';
+  _snapList.forEach(function(s, i) {
+    var p = s.properties || {};
+    h += '<tr>'
+      + '<td style="font-family:monospace;font-size:11px;">' + snapEsc(s.dataset || '') + '</td>'
+      + '<td style="font-family:monospace;font-size:11px;"><strong>' + snapEsc(s.snapshot_name || '') + '</strong></td>'
+      + '<td style="font-size:11px;">' + snapEsc(snapFmtDate(p)) + '</td>'
+      + '<td style="font-size:11px;">' + snapEsc(snapFmtSize(p, 'used')) + '</td>'
+      + '<td style="font-size:11px;">' + snapEsc(snapFmtSize(p, 'referenced')) + '</td>'
+      + '<td style="white-space:nowrap;display:flex;gap:4px;">'
+      + '<button class="fs-btn" style="font-size:11px;padding:3px 9px;" onclick="snapRollbackForm(' + i + ')" title="Restaurer le dataset à cet état">⟲ Restaurer</button>'
+      + '<button class="fs-btn" style="font-size:11px;padding:3px 9px;" onclick="snapClone(' + i + ')" title="Cloner vers un nouveau dataset">⧉ Cloner</button>'
+      + '<button class="fs-btn" style="font-size:11px;padding:3px 9px;background:rgba(239,68,68,0.15);border-color:rgba(239,68,68,0.3);color:#f87171;" onclick="snapDelete(' + i + ')" title="Supprimer">🗑</button>'
+      + '</td></tr>';
+  });
+  h += '</tbody></table>';
+  b.innerHTML = h;
+}
+
+function snapDefName() {
+  var d = new Date();
+  function p(n) { return n < 10 ? '0' + n : '' + n; }
+  return 'manuel-' + d.getFullYear() + p(d.getMonth() + 1) + p(d.getDate()) + '-' + p(d.getHours()) + p(d.getMinutes());
+}
+function snapCreateForm() {
+  var b = document.getElementById('snap-body');
+  if (!b) return;
+  var dsOpts = _snapDatasets.map(function(d) { return '<option value="' + snapEsc(d) + '"' + (_snapFilter === d ? ' selected' : '') + '>' + snapEsc(d) + '</option>'; }).join('');
+  b.innerHTML =
+    '<div style="max-width:560px;">'
+    + '<h3 style="margin:0 0 14px;">Créer un snapshot manuel</h3>'
+    + formRow('Dataset', '<select id="snap-ds" class="tnd-input">' + dsOpts + '</select>')
+    + formRow('Nom', '<input id="snap-name" class="tnd-input" value="' + snapEsc(snapDefName()) + '">')
+    + '<label class="tnd-switch" style="display:flex;justify-content:space-between;gap:10px;margin:6px 0 14px;"><span>Récursif (inclure les datasets enfants)</span><input type="checkbox" id="snap-rec"></label>'
+    + '<div style="display:flex;gap:8px;justify-content:flex-end;">'
+    + '<button class="fs-btn" onclick="snapLoadSnaps()">Annuler</button>'
+    + '<button class="fs-btn" style="background:rgba(62,207,142,0.15);border-color:rgba(62,207,142,0.3);color:var(--success);" onclick="snapCreateSave()">Créer</button>'
+    + '</div></div>';
+}
+async function snapCreateSave() {
+  var ds = document.getElementById('snap-ds').value;
+  var name = document.getElementById('snap-name').value.trim();
+  var rec = document.getElementById('snap-rec').checked;
+  if (!ds) { toast('Choisis un dataset'); return; }
+  if (!name) { toast('Le nom est obligatoire'); return; }
+  if (!/^[A-Za-z0-9][A-Za-z0-9._:\- ]*$/.test(name)) { toast('Nom de snapshot invalide'); return; }
+  toast('Création…');
+  try { await wsCall('pool.snapshot.create', [{ dataset: ds, name: name, recursive: rec }], 120000); toast('✅ Snapshot créé'); _snapFilter = ds; snapLoadSnaps(); }
+  catch(e) { toast('Err: ' + e.message); }
+}
+
+function snapRollbackForm(i) {
+  var s = _snapAt(i);
+  if (!s.id) return;
+  var b = document.getElementById('snap-body');
+  if (!b) return;
+  b.innerHTML =
+    '<div style="max-width:620px;">'
+    + '<h3 style="margin:0 0 8px;color:#f87171;">⚠ Restaurer un snapshot</h3>'
+    + '<div style="background:rgba(239,68,68,0.10);border:1px solid rgba(239,68,68,0.3);border-radius:8px;padding:10px 12px;font-size:12px;margin-bottom:14px;">'
+    + 'Le dataset <strong>' + snapEsc(s.dataset) + '</strong> va revenir à l\'état du snapshot <strong>' + snapEsc(s.snapshot_name) + '</strong>.<br>'
+    + '<span style="color:#f87171;">Toutes les données écrites après ce snapshot seront définitivement perdues.</span> '
+    + 'Les snapshots plus récents doivent être détruits pour que la restauration aboutisse.'
+    + '</div>'
+    + '<label class="tnd-switch" style="display:flex;justify-content:space-between;gap:10px;margin-bottom:8px;"><span>Détruire les snapshots plus récents (requis s\'il y en a)</span><input type="checkbox" id="snap-rb-rec"></label>'
+    + '<label class="tnd-switch" style="display:flex;justify-content:space-between;gap:10px;margin-bottom:14px;"><span>Détruire aussi les clones plus récents</span><input type="checkbox" id="snap-rb-clones"></label>'
+    + '<div style="display:flex;gap:8px;justify-content:flex-end;">'
+    + '<button class="fs-btn" onclick="snapLoadSnaps()">Annuler</button>'
+    + '<button class="fs-btn" style="background:rgba(239,68,68,0.15);border-color:rgba(239,68,68,0.35);color:#f87171;" onclick="snapRollbackDo(' + i + ')">Restaurer maintenant</button>'
+    + '</div></div>';
+}
+async function snapRollbackDo(i) {
+  var s = _snapAt(i);
+  if (!s.id) return;
+  var opts = {
+    recursive: document.getElementById('snap-rb-rec').checked,
+    recursive_clones: document.getElementById('snap-rb-clones').checked
+  };
+  if (!await showConfirm('Confirmer la restauration de <strong>' + snapEsc(s.dataset) + '</strong> ? Cette action est irréversible.', { danger: true, ok: 'Restaurer', icon: '⟲' })) return;
+  toast('Restauration…');
+  try { await wsCall('pool.snapshot.rollback', [s.id, opts], 300000); toast('✅ Dataset restauré'); snapLoadSnaps(); }
+  catch(e) { toast('Err: ' + e.message); }
+}
+async function snapClone(i) {
+  var s = _snapAt(i);
+  if (!s.id) return;
+  var d = new Date();
+  function p(n) { return n < 10 ? '0' + n : '' + n; }
+  var def = (s.dataset || '') + '_clone_' + d.getFullYear() + p(d.getMonth() + 1) + p(d.getDate()) + '-' + p(d.getHours()) + p(d.getMinutes());
+  var dst = await showPrompt('Cloner vers un nouveau dataset (chemin complet) :', def);
+  if (dst === null || dst === undefined) return;
+  dst = String(dst).trim();
+  if (!dst) { toast('Chemin requis'); return; }
+  toast('Clonage…');
+  try { await wsCall('pool.snapshot.clone', [{ snapshot: s.id, dataset_dst: dst }], 120000); toast('✅ Snapshot cloné vers ' + dst); }
+  catch(e) { toast('Err: ' + e.message); }
+}
+async function snapDelete(i) {
+  var s = _snapAt(i);
+  if (!s.id) return;
+  if (!await showConfirm('Supprimer le snapshot <strong>' + snapEsc(s.name || s.id) + '</strong> ?', { danger: true, ok: 'Supprimer', icon: '🗑' })) return;
+  try { await wsCall('pool.snapshot.delete', [s.id], 120000); toast('Snapshot supprimé'); snapLoadSnaps(); }
+  catch(e) { toast('Err: ' + e.message); }
+}
+
+async function snapLoadTasks() {
+  var b = document.getElementById('snap-body');
+  if (!b) return;
+  b.innerHTML = '<div class="fs-loading" style="height:180px;"><div class="spinner"></div></div>';
+  _snapTasks = ensureArray(await wsCall('pool.snapshottask.query', [[], {}], 60000));
+  snapRenderTasks();
+}
+function _snapTaskAt(i) { return _snapTasks[i] || {}; }
+function snapRenderTasks() {
+  var b = document.getElementById('snap-body');
+  if (!b) return;
+  var h = '<div style="margin-bottom:12px;display:flex;gap:8px;">'
+    + '<button class="fs-btn" onclick="snapTaskEditor(null)" style="background:rgba(62,207,142,0.15);border-color:rgba(62,207,142,0.3);color:var(--success);">＋ Nouvelle tâche</button>'
+    + '<button class="fs-btn" onclick="snapLoadTasks()">↻ Actualiser</button></div>';
+  if (!_snapTasks.length) {
+    h += '<div class="empty-state" style="height:160px;"><div class="es-icon">🗓️</div><span>Aucune tâche de snapshot périodique</span></div>';
+    b.innerHTML = h; return;
+  }
+  h += '<table class="container-table"><thead><tr><th>Dataset</th><th>Planning</th><th>Rétention</th><th>Récursif</th><th style="text-align:center;">Activée</th><th>Actions</th></tr></thead><tbody>';
+  _snapTasks.forEach(function(t, i) {
+    h += '<tr>'
+      + '<td style="font-family:monospace;font-size:11px;">' + snapEsc(t.dataset || '') + '</td>'
+      + '<td>' + cronScheduleText(t.schedule || {}) + '</td>'
+      + '<td style="font-size:11px;">' + snapEsc((t.lifetime_value != null ? t.lifetime_value : '') + ' ' + snapUnitLabel(t.lifetime_unit)) + '</td>'
+      + '<td style="font-size:11px;">' + (t.recursive ? 'Oui' : 'Non') + '</td>'
+      + '<td style="text-align:center;"><input type="checkbox" ' + (t.enabled ? 'checked' : '') + ' onchange="snapTaskToggle(' + i + ',this.checked)" style="width:14px;height:14px;cursor:pointer;"></td>'
+      + '<td style="white-space:nowrap;display:flex;gap:4px;">'
+      + '<button class="fs-btn" style="font-size:11px;padding:3px 9px;" onclick="snapTaskEditor(' + i + ')" title="Modifier">✎</button>'
+      + '<button class="fs-btn" style="font-size:11px;padding:3px 9px;background:rgba(239,68,68,0.15);border-color:rgba(239,68,68,0.3);color:#f87171;" onclick="snapTaskDelete(' + i + ')" title="Supprimer">🗑</button>'
+      + '</td></tr>';
+  });
+  h += '</tbody></table>';
+  b.innerHTML = h;
+}
+async function snapTaskToggle(i, enabled) {
+  var t = _snapTaskAt(i);
+  if (!t.id) return;
+  try { await wsCall('pool.snapshottask.update', [t.id, { enabled: !!enabled }], 60000); toast(enabled ? 'Tâche activée' : 'Tâche désactivée'); t.enabled = enabled; }
+  catch(e) { toast('Err: ' + e.message); snapLoadTasks(); }
+}
+async function snapTaskDelete(i) {
+  var t = _snapTaskAt(i);
+  if (!t.id) return;
+  if (!await showConfirm('Supprimer la tâche périodique sur <strong>' + snapEsc(t.dataset) + '</strong> ?', { danger: true, ok: 'Supprimer', icon: '🗑' })) return;
+  try { await wsCall('pool.snapshottask.delete', [t.id], 60000); toast('Tâche supprimée'); snapLoadTasks(); }
+  catch(e) { toast('Err: ' + e.message); }
+}
+function snapTaskPreset(v) {
+  if (!v) return;
+  var p = v.split(/\s+/);
+  ['sk-min','sk-hour','sk-dom','sk-month','sk-dow'].forEach(function(cid, idx) { var e = document.getElementById(cid); if (e) e.value = p[idx] || '*'; });
+}
+function snapTaskEditor(i) {
+  var b = document.getElementById('snap-body');
+  if (!b) return;
+  var t = (i != null) ? _snapTaskAt(i) : {};
+  var s = t.schedule || {};
+  var isNew = (i == null);
+  var dsOpts = _snapDatasets.map(function(d) { return '<option value="' + snapEsc(d) + '"' + (((t.dataset || _snapFilter) === d) ? ' selected' : '') + '>' + snapEsc(d) + '</option>'; }).join('');
+  var unitOpts = SNAP_UNITS.map(function(u) { return '<option value="' + u[0] + '"' + (((t.lifetime_unit || 'WEEK') === u[0]) ? ' selected' : '') + '>' + u[1] + '</option>'; }).join('');
+  var presetOpts = CRON_PRESETS.map(function(p) { return '<option value="' + p.v + '">' + p.label + '</option>'; }).join('');
+  var val = function(x, d) { return snapEsc(x != null ? x : d); };
+  b.innerHTML =
+    '<div style="max-width:660px;">'
+    + '<h3 style="margin:0 0 14px;">' + (isNew ? 'Nouvelle tâche de snapshot' : 'Modifier la tâche') + '</h3>'
+    + '<input type="hidden" id="sk-id" value="' + (isNew ? '' : t.id) + '">'
+    + formRow('Dataset', '<select id="sk-ds" class="tnd-input">' + dsOpts + '</select>')
+    + formRow('Schéma de nommage', '<input id="sk-schema" class="tnd-input" style="font-family:monospace;" value="' + val(t.naming_schema, 'auto-%Y-%m-%d_%H-%M') + '">')
+    + formRow('Rétention', '<span style="display:flex;gap:8px;"><input id="sk-lifeval" class="tnd-input" type="number" min="1" style="width:90px;" value="' + val(t.lifetime_value, 2) + '"><select id="sk-lifeunit" class="tnd-input">' + unitOpts + '</select></span>')
+    + formRow('Modèle', '<select class="tnd-input" onchange="snapTaskPreset(this.value)">' + presetOpts + '</select>')
+    + '<div style="display:grid;grid-template-columns:repeat(5,1fr);gap:8px;margin:6px 0 10px;">'
+      + cronField('Minute', 'sk-min', s.minute, '0')
+      + cronField('Heure', 'sk-hour', s.hour, '*')
+      + cronField('Jour (mois)', 'sk-dom', s.dom, '*')
+      + cronField('Mois', 'sk-month', s.month, '*')
+      + cronField('Jour (sem.)', 'sk-dow', s.dow, '*')
+    + '</div>'
+    + '<div style="display:flex;gap:8px;margin-bottom:10px;">'
+      + '<div style="flex:1;"><label style="font-size:11px;color:var(--text-dim);display:block;margin-bottom:3px;">Début (heure)</label><input id="sk-begin" class="tnd-input" value="' + val(s.begin, '00:00') + '"></div>'
+      + '<div style="flex:1;"><label style="font-size:11px;color:var(--text-dim);display:block;margin-bottom:3px;">Fin (heure)</label><input id="sk-end" class="tnd-input" value="' + val(s.end, '23:59') + '"></div>'
+    + '</div>'
+    + '<label class="tnd-switch" style="display:flex;justify-content:space-between;gap:10px;margin-bottom:8px;"><span>Récursif (datasets enfants)</span><input type="checkbox" id="sk-rec" ' + (t.recursive ? 'checked' : '') + '></label>'
+    + '<label class="tnd-switch" style="display:flex;justify-content:space-between;gap:10px;margin-bottom:8px;"><span>Autoriser les snapshots vides</span><input type="checkbox" id="sk-empty" ' + ((isNew || t.allow_empty) ? 'checked' : '') + '></label>'
+    + '<label class="tnd-switch" style="display:flex;justify-content:space-between;gap:10px;margin-bottom:14px;"><span>Activée</span><input type="checkbox" id="sk-enabled" ' + ((isNew || t.enabled) ? 'checked' : '') + '></label>'
+    + '<div style="display:flex;gap:8px;justify-content:flex-end;">'
+      + '<button class="fs-btn" onclick="snapLoadTasks()">Annuler</button>'
+      + '<button class="fs-btn" style="background:rgba(62,207,142,0.15);border-color:rgba(62,207,142,0.3);color:var(--success);" onclick="snapTaskSave()">Enregistrer</button>'
+    + '</div></div>';
+}
+async function snapTaskSave() {
+  var idv = document.getElementById('sk-id').value;
+  var ds = document.getElementById('sk-ds').value;
+  if (!ds) { toast('Choisis un dataset'); return; }
+  var payload = {
+    dataset: ds,
+    naming_schema: document.getElementById('sk-schema').value.trim() || 'auto-%Y-%m-%d_%H-%M',
+    lifetime_value: parseInt(document.getElementById('sk-lifeval').value, 10) || 2,
+    lifetime_unit: document.getElementById('sk-lifeunit').value,
+    recursive: document.getElementById('sk-rec').checked,
+    allow_empty: document.getElementById('sk-empty').checked,
+    enabled: document.getElementById('sk-enabled').checked,
+    schedule: {
+      minute: document.getElementById('sk-min').value.trim() || '*',
+      hour: document.getElementById('sk-hour').value.trim() || '*',
+      dom: document.getElementById('sk-dom').value.trim() || '*',
+      month: document.getElementById('sk-month').value.trim() || '*',
+      dow: document.getElementById('sk-dow').value.trim() || '*',
+      begin: document.getElementById('sk-begin').value.trim() || '00:00',
+      end: document.getElementById('sk-end').value.trim() || '23:59'
+    }
+  };
+  try {
+    if (idv) await wsCall('pool.snapshottask.update', [Number(idv), payload], 120000);
+    else await wsCall('pool.snapshottask.create', [payload], 120000);
+    toast('✅ Tâche enregistrée');
+    snapLoadTasks();
+  } catch(e) { toast('Err: ' + e.message); }
 }
 
 // ============================================================
@@ -12985,6 +13304,21 @@ if (typeof renderLibvirt2Detail === 'function' && !window._lv2DetailTabsWrapped)
     <div id="bootenv-content"><div class="fs-loading" style="height:200px;"><div class="spinner"></div></div></div>
   </div>
   <div class="resize-handle" data-win="bootenv"></div>
+</div>
+
+<div class="window panel-win" id="win-snapshots" style="top:55px;left:170px;width:960px;height:600px;">
+  <div class="window-titlebar" data-win="snapshots">
+    <span class="window-icon">📸</span>
+    <span class="window-title">Snapshots ZFS</span>
+    <div class="window-controls">
+      <button class="win-btn min" onclick="minimizeWin('snapshots')"></button>
+      <button class="win-btn max" onclick="toggleMaxWin('snapshots')"></button>
+      <button class="win-btn cls" onclick="closeWin('snapshots')"></button>
+    </div></div>
+  <div class="window-body">
+    <div id="snapshots-content"><div class="fs-loading" style="height:200px;"><div class="spinner"></div></div></div>
+  </div>
+  <div class="resize-handle" data-win="snapshots"></div>
 </div>
 
 <!-- ══════════════════════════════════════════════════
