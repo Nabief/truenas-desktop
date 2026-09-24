@@ -6597,7 +6597,8 @@ function openApp(id) {
     libvirt:      loadLibvirt2,
     cron:         loadCron,
     bootenv:      loadBootenv,
-    snapshots:    loadSnapshots
+    snapshots:    loadSnapshots,
+    maintenance:  loadMaintenance
   };
   if (loaders[id]) loaders[id]();
 }
@@ -7602,6 +7603,8 @@ var ALL_APPS = [
     imgStyle:'background:linear-gradient(135deg,#f59e0b,#ef4444);', svg:'<svg viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,0.95)" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><polyline points="9 12 11 14 15 10"/></svg>' },
   { id:'snapshots',   label:'Snapshots ZFS',         action:function(){ openApp('snapshots'); },
     imgStyle:'background:linear-gradient(135deg,#8b5cf6,#06b6d4);', svg:'<svg viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,0.95)" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 3a9 9 0 0 1 0 18"/><path d="M12 8v4l3 2"/></svg>' },
+  { id:'maintenance', label:'Disques & Scrub',        action:function(){ openApp('maintenance'); },
+    imgStyle:'background:linear-gradient(135deg,#14b8a6,#0ea5e9);', svg:'<svg viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,0.95)" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="6" rx="8" ry="3"/><path d="M4 6v6c0 1.66 3.58 3 8 3s8-1.34 8-3V6"/><path d="M4 12v6c0 1.66 3.58 3 8 3s8-1.34 8-3v-6"/></svg>' },
   { id:'libvirt',     label:'VMs QEMU/KVM',          action:function(){ openApp('libvirt'); },
     imgClass:'icon-vm',       svg:'<svg viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,0.95)" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/><circle cx="7" cy="8" r="1.5" fill="rgba(255,255,255,0.95)"/><circle cx="12" cy="8" r="1.5" fill="rgba(255,255,255,0.95)"/><circle cx="17" cy="8" r="1.5" fill="rgba(255,255,255,0.95)"/></svg>' },
 ];
@@ -9025,6 +9028,230 @@ async function snapTaskSave() {
     else await wsCall('pool.snapshottask.create', [payload], 120000);
     toast('✅ Tâche enregistrée');
     snapLoadTasks();
+  } catch(e) { toast('Err: ' + e.message); }
+}
+
+// ============================================================
+// DISQUES & SCRUB — disk.* + pool.scrub.* (v26.0)
+// ============================================================
+var _mntTab = 'disks';
+var _dskList = [];
+var _dskTemps = {};
+var _poolList = [];
+var _scrubTasks = [];
+var MNT_TAB_ACTIVE = 'background:rgba(62,207,142,0.15);border-color:rgba(62,207,142,0.3);color:var(--success);';
+
+function mntEsc(s) { return String(s == null ? '' : s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+function mntFmtSize(n) {
+  if (n == null || n === '') return '—';
+  n = Number(n);
+  if (!isFinite(n)) return '—';
+  var u = ['o','Ko','Mo','Go','To','Po'], i = 0;
+  while (n >= 1024 && i < u.length - 1) { n /= 1024; i++; }
+  return (Math.round(n * 10) / 10) + ' ' + u[i];
+}
+function mntTempCell(name) {
+  var v = _dskTemps ? _dskTemps[name] : null;
+  if (v == null || v === '') return '<span style="color:var(--text-dim);">—</span>';
+  var n = Number(v);
+  if (!isFinite(n)) return '<span style="color:var(--text-dim);">' + mntEsc(v) + '</span>';
+  var col = n >= 50 ? '#f87171' : (n >= 45 ? '#eab308' : 'var(--success)');
+  return '<span style="color:' + col + ';font-weight:600;">' + n + ' °C</span>';
+}
+
+async function loadMaintenance() {
+  var el = document.getElementById('maintenance-content');
+  if (!el) return;
+  el.innerHTML =
+    '<div style="display:flex;gap:4px;margin-bottom:12px;">'
+    + '<button class="fs-btn" onclick="mntSetTab(\'disks\')" style="' + (_mntTab === 'disks' ? MNT_TAB_ACTIVE : '') + '">🖴 Disques</button>'
+    + '<button class="fs-btn" onclick="mntSetTab(\'scrubs\')" style="' + (_mntTab === 'scrubs' ? MNT_TAB_ACTIVE : '') + '">🧹 Scrubs</button>'
+    + '</div><div id="mnt-body"><div class="fs-loading" style="height:180px;"><div class="spinner"></div></div></div>';
+  try {
+    if (_mntTab === 'disks') await mntLoadDisks(); else await mntLoadScrubs();
+  } catch (e) {
+    var b = document.getElementById('mnt-body');
+    if (b) b.innerHTML = errHtml('Erreur : ' + e.message);
+  }
+}
+function mntSetTab(t) { _mntTab = t; loadMaintenance(); }
+
+async function mntLoadDisks() {
+  var b = document.getElementById('mnt-body');
+  if (!b) return;
+  b.innerHTML = '<div class="fs-loading" style="height:180px;"><div class="spinner"></div></div>';
+  _dskList = ensureArray(await wsCall('disk.query', [[], { extra: { pools: true } }], 60000));
+  var names = _dskList.map(function(d) { return d.name; }).filter(Boolean);
+  _dskTemps = {};
+  if (names.length) { try { _dskTemps = (await wsCall('disk.temperatures', [names], 60000)) || {}; } catch(_) {} }
+  mntRenderDisks();
+}
+function mntRenderDisks() {
+  var b = document.getElementById('mnt-body');
+  if (!b) return;
+  var h = '<div style="margin-bottom:12px;display:flex;gap:8px;"><button class="fs-btn" onclick="mntLoadDisks()">↻ Actualiser</button></div>';
+  if (!_dskList.length) {
+    h += '<div class="empty-state" style="height:160px;"><div class="es-icon">🖴</div><span>Aucun disque détecté</span></div>';
+    b.innerHTML = h; return;
+  }
+  h += '<table class="container-table"><thead><tr><th>Disque</th><th>Modèle</th><th>Série</th><th>Taille</th><th>Type</th><th>Pool</th><th style="text-align:right;">Temp.</th></tr></thead><tbody>';
+  _dskList.forEach(function(d) {
+    var type = d.type || '';
+    if (type === 'HDD' && d.rotationrate) type += ' ' + d.rotationrate + ' t/min';
+    h += '<tr>'
+      + '<td style="font-family:monospace;font-size:11px;"><strong>' + mntEsc(d.name || '') + '</strong></td>'
+      + '<td style="font-size:11px;">' + mntEsc(d.model || '') + '</td>'
+      + '<td style="font-family:monospace;font-size:11px;">' + mntEsc(d.serial || '') + '</td>'
+      + '<td style="font-size:11px;">' + mntEsc(mntFmtSize(d.size)) + '</td>'
+      + '<td style="font-size:11px;">' + mntEsc(type) + '</td>'
+      + '<td style="font-size:11px;">' + (d.pool ? mntEsc(d.pool) : '<span style="color:var(--text-dim);">—</span>') + '</td>'
+      + '<td style="text-align:right;">' + mntTempCell(d.name) + '</td>'
+      + '</tr>';
+  });
+  h += '</tbody></table>';
+  h += '<div style="font-size:11px;color:var(--text-dim);margin-top:8px;">Note : TrueNAS ne relève les températures qu\'une fois toutes les 5 minutes.</div>';
+  b.innerHTML = h;
+}
+
+async function mntLoadScrubs() {
+  var b = document.getElementById('mnt-body');
+  if (!b) return;
+  b.innerHTML = '<div class="fs-loading" style="height:180px;"><div class="spinner"></div></div>';
+  _poolList = ensureArray(await wsCall('pool.query', [[], {}], 60000));
+  _scrubTasks = ensureArray(await wsCall('pool.scrub.query', [[], {}], 60000));
+  mntRenderScrubs();
+}
+function mntScanText(p) {
+  var sc = p.scan || {};
+  var st = sc.state || '';
+  var fn = sc.function || sc['function'] || '';
+  if (!st) return '<span style="color:var(--text-dim);">—</span>';
+  if (st === 'SCANNING') {
+    var pct = (sc.percentage != null) ? (' ' + Math.round(sc.percentage) + '%') : '';
+    return '<span style="color:#60a5fa;">' + (fn === 'SCRUB' ? 'Scrub en cours' : 'Analyse en cours') + pct + '</span>';
+  }
+  if (st === 'FINISHED') return '<span style="color:var(--success);">Terminé</span>';
+  return '<span style="color:var(--text-dim);">' + mntEsc(st) + '</span>';
+}
+function mntRenderScrubs() {
+  var b = document.getElementById('mnt-body');
+  if (!b) return;
+  var h = '<div style="margin-bottom:10px;display:flex;gap:8px;"><button class="fs-btn" onclick="mntLoadScrubs()">↻ Actualiser</button></div>';
+  h += '<div class="sysinfo-card" style="margin-bottom:14px;"><h3 style="margin-top:0;">Pools</h3>';
+  if (!_poolList.length) {
+    h += '<div style="font-size:12px;color:var(--text-dim);">Aucun pool</div>';
+  } else {
+    h += '<table class="container-table" style="margin:0;"><thead><tr><th>Pool</th><th>État</th><th>Analyse</th><th>Action</th></tr></thead><tbody>';
+    _poolList.forEach(function(p) {
+      h += '<tr>'
+        + '<td><strong>' + mntEsc(p.name || '') + '</strong></td>'
+        + '<td style="font-size:11px;">' + mntEsc(p.status || '') + '</td>'
+        + '<td style="font-size:11px;">' + mntScanText(p) + '</td>'
+        + '<td><button class="fs-btn" style="font-size:11px;padding:3px 9px;" onclick="mntRunScrub(\'' + mntEsc(p.name).replace(/\\/g,'\\\\').replace(/'/g,"\\'") + '\')">🧹 Lancer le scrub</button></td>'
+        + '</tr>';
+    });
+    h += '</tbody></table>';
+  }
+  h += '</div>';
+  h += '<div style="display:flex;gap:8px;align-items:center;margin-bottom:10px;"><h3 style="margin:0;flex:1;">Tâches de scrub planifiées</h3>'
+    + '<button class="fs-btn" onclick="mntScrubEditor(null)" style="background:rgba(62,207,142,0.15);border-color:rgba(62,207,142,0.3);color:var(--success);">＋ Nouvelle tâche</button></div>';
+  if (!_scrubTasks.length) {
+    h += '<div class="empty-state" style="height:120px;"><div class="es-icon">🧹</div><span>Aucune tâche de scrub planifiée</span></div>';
+    b.innerHTML = h; return;
+  }
+  h += '<table class="container-table"><thead><tr><th>Pool</th><th>Planning</th><th>Seuil</th><th style="text-align:center;">Activée</th><th>Actions</th></tr></thead><tbody>';
+  _scrubTasks.forEach(function(t, i) {
+    h += '<tr>'
+      + '<td><strong>' + mntEsc(t.pool_name || t.pool || '') + '</strong></td>'
+      + '<td>' + cronScheduleText(t.schedule || {}) + '</td>'
+      + '<td style="font-size:11px;">' + mntEsc((t.threshold != null ? t.threshold : '') + ' jours') + '</td>'
+      + '<td style="text-align:center;"><input type="checkbox" ' + (t.enabled ? 'checked' : '') + ' onchange="mntScrubToggle(' + i + ',this.checked)" style="width:14px;height:14px;cursor:pointer;"></td>'
+      + '<td style="white-space:nowrap;display:flex;gap:4px;">'
+      + '<button class="fs-btn" style="font-size:11px;padding:3px 9px;" onclick="mntScrubEditor(' + i + ')" title="Modifier">✎</button>'
+      + '<button class="fs-btn" style="font-size:11px;padding:3px 9px;background:rgba(239,68,68,0.15);border-color:rgba(239,68,68,0.3);color:#f87171;" onclick="mntScrubDelete(' + i + ')" title="Supprimer">🗑</button>'
+      + '</td></tr>';
+  });
+  h += '</tbody></table>';
+  b.innerHTML = h;
+}
+async function mntRunScrub(name) {
+  if (!name) return;
+  if (!await showConfirm('Lancer un scrub sur le pool <strong>' + mntEsc(name) + '</strong> maintenant ?<br><span style="font-size:11px;color:var(--text-dim);">L\'opération tourne en arrière-plan et peut durer plusieurs heures.</span>', { icon: '🧹', ok: 'Lancer' })) return;
+  toast('Scrub lancé…');
+  try { await socketCall('/pool/scrub', 'POST', { name: name }); toast('✅ Scrub démarré sur ' + name); mntLoadScrubs(); }
+  catch(e) { toast('Err: ' + e.message); }
+}
+function _scrubAt(i) { return _scrubTasks[i] || {}; }
+async function mntScrubToggle(i, enabled) {
+  var t = _scrubAt(i);
+  if (!t.id) return;
+  try { await wsCall('pool.scrub.update', [t.id, { enabled: !!enabled }], 60000); toast(enabled ? 'Tâche activée' : 'Tâche désactivée'); t.enabled = enabled; }
+  catch(e) { toast('Err: ' + e.message); mntLoadScrubs(); }
+}
+async function mntScrubDelete(i) {
+  var t = _scrubAt(i);
+  if (!t.id) return;
+  if (!await showConfirm('Supprimer la tâche de scrub du pool <strong>' + mntEsc(t.pool_name || t.pool) + '</strong> ?', { danger: true, ok: 'Supprimer', icon: '🗑' })) return;
+  try { await wsCall('pool.scrub.delete', [t.id], 60000); toast('Tâche supprimée'); mntLoadScrubs(); }
+  catch(e) { toast('Err: ' + e.message); }
+}
+function mntScrubPreset(v) {
+  if (!v) return;
+  var p = v.split(/\s+/);
+  ['scr-min','scr-hour','scr-dom','scr-month','scr-dow'].forEach(function(cid, idx) { var e = document.getElementById(cid); if (e) e.value = p[idx] || '*'; });
+}
+function mntScrubEditor(i) {
+  var b = document.getElementById('mnt-body');
+  if (!b) return;
+  var t = (i != null) ? _scrubAt(i) : {};
+  var s = t.schedule || {};
+  var isNew = (i == null);
+  var poolOpts = _poolList.map(function(p) { return '<option value="' + p.id + '"' + ((t.pool === p.id) ? ' selected' : '') + '>' + mntEsc(p.name) + '</option>'; }).join('');
+  var presetOpts = CRON_PRESETS.map(function(p) { return '<option value="' + p.v + '">' + p.label + '</option>'; }).join('');
+  var val = function(x, d) { return mntEsc(x != null ? x : d); };
+  b.innerHTML =
+    '<div style="max-width:640px;">'
+    + '<h3 style="margin:0 0 14px;">' + (isNew ? 'Nouvelle tâche de scrub' : 'Modifier la tâche') + '</h3>'
+    + '<input type="hidden" id="scr-id" value="' + (isNew ? '' : t.id) + '">'
+    + formRow('Pool', '<select id="scr-pool" class="tnd-input">' + poolOpts + '</select>')
+    + formRow('Seuil (jours)', '<input id="scr-threshold" class="tnd-input" type="number" min="0" style="width:120px;" value="' + val(t.threshold, 35) + '"><span style="font-size:11px;color:var(--text-dim);margin-left:8px;">ne relance pas si un scrub a eu lieu depuis moins de N jours</span>')
+    + formRow('Description', '<input id="scr-desc" class="tnd-input" value="' + val(t.description, '') + '">')
+    + formRow('Modèle', '<select class="tnd-input" onchange="mntScrubPreset(this.value)">' + presetOpts + '</select>')
+    + '<div style="display:grid;grid-template-columns:repeat(5,1fr);gap:8px;margin:6px 0 12px;">'
+      + cronField('Minute', 'scr-min', s.minute, '0')
+      + cronField('Heure', 'scr-hour', s.hour, '0')
+      + cronField('Jour (mois)', 'scr-dom', s.dom, '*')
+      + cronField('Mois', 'scr-month', s.month, '*')
+      + cronField('Jour (sem.)', 'scr-dow', s.dow, '7')
+    + '</div>'
+    + '<label class="tnd-switch" style="display:flex;justify-content:space-between;gap:10px;margin-bottom:14px;"><span>Activée</span><input type="checkbox" id="scr-enabled" ' + ((isNew || t.enabled) ? 'checked' : '') + '></label>'
+    + '<div style="display:flex;gap:8px;justify-content:flex-end;">'
+      + '<button class="fs-btn" onclick="mntLoadScrubs()">Annuler</button>'
+      + '<button class="fs-btn" style="background:rgba(62,207,142,0.15);border-color:rgba(62,207,142,0.3);color:var(--success);" onclick="mntScrubSave()">Enregistrer</button>'
+    + '</div></div>';
+}
+async function mntScrubSave() {
+  var idv = document.getElementById('scr-id').value;
+  var poolId = parseInt(document.getElementById('scr-pool').value, 10);
+  if (!isFinite(poolId)) { toast('Choisis un pool'); return; }
+  var payload = {
+    pool: poolId,
+    threshold: parseInt(document.getElementById('scr-threshold').value, 10) || 0,
+    description: document.getElementById('scr-desc').value.trim(),
+    enabled: document.getElementById('scr-enabled').checked,
+    schedule: {
+      minute: document.getElementById('scr-min').value.trim() || '*',
+      hour: document.getElementById('scr-hour').value.trim() || '*',
+      dom: document.getElementById('scr-dom').value.trim() || '*',
+      month: document.getElementById('scr-month').value.trim() || '*',
+      dow: document.getElementById('scr-dow').value.trim() || '*'
+    }
+  };
+  try {
+    if (idv) await wsCall('pool.scrub.update', [Number(idv), payload], 120000);
+    else await wsCall('pool.scrub.create', [payload], 120000);
+    toast('✅ Tâche enregistrée');
+    mntLoadScrubs();
   } catch(e) { toast('Err: ' + e.message); }
 }
 
@@ -13319,6 +13546,21 @@ if (typeof renderLibvirt2Detail === 'function' && !window._lv2DetailTabsWrapped)
     <div id="snapshots-content"><div class="fs-loading" style="height:200px;"><div class="spinner"></div></div></div>
   </div>
   <div class="resize-handle" data-win="snapshots"></div>
+</div>
+
+<div class="window panel-win" id="win-maintenance" style="top:58px;left:180px;width:940px;height:580px;">
+  <div class="window-titlebar" data-win="maintenance">
+    <span class="window-icon">🩺</span>
+    <span class="window-title">Disques &amp; Scrub</span>
+    <div class="window-controls">
+      <button class="win-btn min" onclick="minimizeWin('maintenance')"></button>
+      <button class="win-btn max" onclick="toggleMaxWin('maintenance')"></button>
+      <button class="win-btn cls" onclick="closeWin('maintenance')"></button>
+    </div></div>
+  <div class="window-body">
+    <div id="maintenance-content"><div class="fs-loading" style="height:200px;"><div class="spinner"></div></div></div>
+  </div>
+  <div class="resize-handle" data-win="maintenance"></div>
 </div>
 
 <!-- ══════════════════════════════════════════════════
