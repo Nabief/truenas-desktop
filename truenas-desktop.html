@@ -337,6 +337,8 @@ try { document.documentElement.setAttribute('data-theme', localStorage.getItem('
     transition:background 0.15s; font-size:18px;
   }
   .taskbar-notif-badge:hover { background:rgba(255,255,255,0.08); }
+  @keyframes jobspin { to { transform: rotate(360deg); } }
+  .jobs-spin { display:inline-block; animation: jobspin 2.4s linear infinite; font-size:14px; }
   .badge-count {
     position:absolute; top:2px; right:2px; min-width:16px; height:16px;
     background:var(--danger); border-radius:8px; font-size:9px; font-weight:700;
@@ -2438,6 +2440,13 @@ select option{ background:#101b2e; color:#e8edf5; }
       <div class="ws-dot" id="ws-dot" title="WebSocket temps réel"></div>
       <span class="taskbar-status-label">WS</span>
     </div>
+    <div class="taskbar-notif-badge" id="jobs-taskbar" onclick="jobsTogglePopover(event)" title="Tâches en cours" style="display:none;gap:5px;">
+      <span class="jobs-spin">⚙️</span><span id="jobs-taskbar-count" style="font-size:11px;font-weight:600;">0</span>
+    </div>
+    <div id="jobs-popover" style="display:none;position:fixed;bottom:calc(var(--taskbar-h) + 8px);right:12px;width:360px;max-height:60vh;overflow:auto;z-index:5000;background:linear-gradient(180deg,rgba(28,38,60,0.99),rgba(18,26,44,0.99));border:1px solid rgba(255,255,255,0.13);border-radius:12px;box-shadow:0 24px 64px rgba(0,0,0,0.7);padding:12px;">
+      <div style="font-size:12px;font-weight:700;margin-bottom:8px;color:var(--text);">Tâches en cours</div>
+      <div id="jobs-popover-list"></div>
+    </div>
     <div class="taskbar-notif-badge" id="dl-taskbar" onclick="openDownloads()" title="Téléchargements en cours" style="display:none;gap:5px;">
       ⬇<span id="dl-taskbar-count" style="font-size:11px;font-weight:600;">0</span><span id="dl-taskbar-pct" style="font-size:10px;color:var(--text-dim);"></span>
     </div>
@@ -3160,6 +3169,7 @@ function initDesktop(sysInfo) {
   loadWidgetData();
   refreshInterval = setInterval(loadWidgetData, 60000); // toutes les 60s pour éviter le spam
   dlBadgeStart();
+  jobsBadgeStart();
   tndLoadConfig();
   setTimeout(tndCheckUpdate, 4000);
   setupContextMenu();
@@ -7253,6 +7263,85 @@ function dlBadgeStart() {
   dlBadgeUpdate();
   _dlBadgeTimer = setInterval(dlBadgeUpdate, 2000);
 }
+
+// ── Tâches en cours (jobs middleware) dans la barre système ──
+var _jobsBadgeTimer = null;
+var _jobsList = [];
+var JOBS_LABELS = {
+  'pool.scrub.scrub':'Scrub de pool', 'pool.scrub.run':'Scrub de pool',
+  'replication.run':'Réplication', 'replication.run_onetime':'Réplication',
+  'rsynctask.run':'Rsync', 'cloudsync.sync':'Cloud Sync', 'cloudsync.sync_onetime':'Cloud Sync',
+  'cloud_backup.sync':'Sauvegarde cloud', 'update.run':'Mise à jour TrueNAS',
+  'update.download':'Téléchargement mise à jour', 'catalog.sync':'Synchro catalogue',
+  'app.upgrade':'Mise à jour application', 'app.update':'Mise à jour application',
+  'app.create':'Installation application', 'app.redeploy':'Redéploiement application',
+  'pool.snapshot.clone':'Clone de snapshot', 'pool.snapshot.rollback':'Restauration de snapshot',
+  'boot.environment.clone':'Clone Boot Environment', 'pool.expand':'Extension de pool',
+  'pool.export':'Export de pool', 'pool.dataset.delete':'Suppression de dataset',
+  'disk.wipe':'Effacement de disque', 'system.reboot':'Redémarrage', 'system.shutdown':'Arrêt'
+};
+function jobsEsc(s) { return String(s == null ? '' : s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+function jobsFriendly(m) { return JOBS_LABELS[m] || m || 'Tâche'; }
+async function jobsBadgeUpdate() {
+  try {
+    var jobs = ensureArray(await wsCall('core.get_jobs', [[['state', '=', 'RUNNING']], { order_by: ['-id'] }], 20000));
+    _jobsList = jobs;
+    var el  = document.getElementById('jobs-taskbar');
+    var cnt = document.getElementById('jobs-taskbar-count');
+    if (cnt) cnt.textContent = jobs.length;
+    if (el)  el.style.display = jobs.length ? 'flex' : 'none';
+    var pop = document.getElementById('jobs-popover');
+    if (pop && pop.style.display === 'block') {
+      if (!jobs.length) pop.style.display = 'none';
+      else jobsRenderPopover();
+    }
+  } catch (_) {}
+}
+function jobsBadgeStart() {
+  if (_jobsBadgeTimer) return;
+  jobsBadgeUpdate();
+  _jobsBadgeTimer = setInterval(jobsBadgeUpdate, 4000);
+}
+function jobsRenderPopover() {
+  var box = document.getElementById('jobs-popover-list');
+  if (!box) return;
+  if (!_jobsList.length) {
+    box.innerHTML = '<div style="font-size:12px;color:var(--text-dim);padding:6px 0;">Aucune tâche en cours</div>';
+    return;
+  }
+  var h = '';
+  _jobsList.forEach(function(j) {
+    var pr  = j.progress || {};
+    var pct = (typeof pr.percent === 'number') ? Math.max(0, Math.min(100, Math.round(pr.percent))) : null;
+    var title = jobsFriendly(j.method);
+    var desc  = (pr.description != null ? String(pr.description) : '');
+    if (desc.length > 90) desc = desc.slice(0, 90) + '…';
+    h += '<div style="padding:8px 0;border-bottom:1px solid rgba(255,255,255,0.06);">'
+      + '<div style="display:flex;justify-content:space-between;gap:8px;font-size:12px;">'
+      + '<span style="font-weight:600;color:var(--text);">' + jobsEsc(title) + '</span>'
+      + '<span style="color:var(--text-dim);">' + (pct != null ? pct + ' %' : '') + '</span>'
+      + '</div>'
+      + (desc ? '<div style="font-size:11px;color:var(--text-dim);margin:2px 0 5px;">' + jobsEsc(desc) + '</div>' : '<div style="height:4px;"></div>')
+      + '<div style="height:6px;background:rgba(255,255,255,0.08);border-radius:4px;overflow:hidden;">'
+      + '<div style="height:100%;width:' + (pct != null ? pct : 100) + '%;background:linear-gradient(90deg,#3ecf8e,#0ea5e9);' + (pct == null ? 'opacity:0.35;' : '') + '"></div>'
+      + '</div></div>';
+  });
+  box.innerHTML = h;
+}
+function jobsTogglePopover(ev) {
+  if (ev) ev.stopPropagation();
+  var pop = document.getElementById('jobs-popover');
+  if (!pop) return;
+  if (pop.style.display === 'block') { pop.style.display = 'none'; }
+  else { jobsRenderPopover(); pop.style.display = 'block'; }
+}
+document.addEventListener('click', function(e) {
+  var pop = document.getElementById('jobs-popover');
+  var btn = document.getElementById('jobs-taskbar');
+  if (pop && pop.style.display === 'block' && !pop.contains(e.target) && btn && !btn.contains(e.target)) {
+    pop.style.display = 'none';
+  }
+});
 
 // ── Comptes premium / débrideurs ──
 var DL_PROVIDERS = [
