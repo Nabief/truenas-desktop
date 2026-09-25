@@ -557,9 +557,15 @@ try { document.documentElement.setAttribute('data-theme', localStorage.getItem('
   .fs-view-list .fs-shared .fs-file-icon::after { font-size:10px; right:-5px; bottom:-3px; }
   /* ── Boutons de bascule de vue ── */
   .fs-view-btn.active { background:rgba(0,120,212,0.3); border-color:rgba(0,168,232,0.5); color:var(--accent2); }
-  /* ── Sélecteur de tri ── */
-  .fstb-select { height:28px; background:rgba(255,255,255,0.06); color:var(--text,#e6edf3); border:1px solid var(--glass-border); border-radius:var(--radius-sm); font-size:11.5px; padding:0 4px; cursor:pointer; outline:none; }
-  .fstb-select:hover { border-color:rgba(0,168,232,0.5); }
+  /* ── Sélecteur de tri (aligné sur les boutons pilule) ── */
+  .fstb-select {
+    padding:6px 10px; border-radius:999px;
+    background:rgba(255,255,255,0.06); border:1px solid var(--glass-border);
+    color:var(--text,#e6edf3); font-size:12px; font-weight:500; line-height:1;
+    cursor:pointer; white-space:nowrap; outline:none; vertical-align:middle;
+    transition:background .15s, border-color .15s, color .15s;
+  }
+  .fstb-select:hover { background:rgba(0,120,212,0.16); border-color:rgba(0,168,232,0.45); color:var(--accent2); }
   .fstb-select option { background:#1b2430; color:#e6edf3; }
   /* ── Éditeur : hôte CodeMirror ── */
   #fs-editor-cm-host { flex:1; overflow:hidden; min-height:0; }
