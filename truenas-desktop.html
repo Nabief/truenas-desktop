@@ -557,6 +557,10 @@ try { document.documentElement.setAttribute('data-theme', localStorage.getItem('
   .fs-view-list .fs-shared .fs-file-icon::after { font-size:10px; right:-5px; bottom:-3px; }
   /* ── Boutons de bascule de vue ── */
   .fs-view-btn.active { background:rgba(0,120,212,0.3); border-color:rgba(0,168,232,0.5); color:var(--accent2); }
+  /* ── Sélecteur de tri ── */
+  .fstb-select { height:28px; background:rgba(255,255,255,0.06); color:var(--text,#e6edf3); border:1px solid var(--glass-border); border-radius:var(--radius-sm); font-size:11.5px; padding:0 4px; cursor:pointer; outline:none; }
+  .fstb-select:hover { border-color:rgba(0,168,232,0.5); }
+  .fstb-select option { background:#1b2430; color:#e6edf3; }
   /* ── Éditeur : hôte CodeMirror ── */
   #fs-editor-cm-host { flex:1; overflow:hidden; min-height:0; }
   #fs-editor-cm-host .CodeMirror { height:100%; font-size:13px; line-height:1.5; font-family:'Courier New',monospace; }
@@ -3561,6 +3565,9 @@ function buildFsWindowHtml(wid, top, left) {
           <button class="fstb-btn fstb-icon-only fs-view-btn" data-view="grid" onclick="setActiveFsWin('${wid}');fsSetView('grid')" title="Mosaïque"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg></button>
           <button class="fstb-btn fstb-icon-only fs-view-btn" data-view="list" onclick="setActiveFsWin('${wid}');fsSetView('list')" title="Liste"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg></button>
           <span class="fstb-sep"></span>
+          <select class="fstb-select" id="${wid}-fs-sortsel" onchange="setActiveFsWin('${wid}');fsSetSort(this.value)" title="Trier par"><option value="name">Nom</option><option value="size">Taille</option><option value="type">Type</option><option value="date">Date</option></select>
+          <button class="fstb-btn fstb-icon-only" id="${wid}-fs-sortdir" onclick="setActiveFsWin('${wid}');fsToggleSortDir()" title="Sens du tri"><span class="fs-sortdir-arrow">↑</span></button>
+          <span class="fstb-sep"></span>
           <button class="fstb-btn primary" id="${wid}-fs-btn-dl" onclick="setActiveFsWin('${wid}');fsDownloadSelected()" style="display:none" title="Télécharger"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg><span>Télécharger</span></button>
           <button class="fstb-btn" id="${wid}-fs-btn-edit" onclick="setActiveFsWin('${wid}');fsEditSelected()" style="display:none" title="Éditer le fichier"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="8" y1="13" x2="16" y2="13"/><line x1="8" y1="17" x2="13" y2="17"/></svg><span>Éditer</span></button>
           <button class="fstb-btn" id="${wid}-fs-btn-share" onclick="setActiveFsWin('${wid}');fsShareSelected()" style="display:none" title="Créer un lien de partage public"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg><span>Partager</span></button>
@@ -3953,9 +3960,57 @@ function fsCopyPath(){
   }
 }
 
+// ── Tri File Station ──────────────────────────────────────────────────────
+var _fsSort = (function(){
+  try {
+    var f = localStorage.getItem('fsSortField');
+    var d = localStorage.getItem('fsSortDir');
+    return { field: (['name','size','type','date'].indexOf(f) >= 0 ? f : 'name'), dir: (d === '-1' ? -1 : 1) };
+  } catch(e){ return { field:'name', dir:1 }; }
+})();
+function fsTypeExt(name){
+  var n = String(name||''); var i = n.lastIndexOf('.');
+  return (i > 0 ? n.slice(i+1) : '').toLowerCase();
+}
+function fsMtimeNum(t){ if (!t) return 0; return t > 1e12 ? t : t * 1000; }
+function fsNameCmp(a,b){ return String(a||'').localeCompare(String(b||''), undefined, { numeric:true, sensitivity:'base' }); }
+function fsSortItems(items){
+  var f = _fsSort.field, dir = _fsSort.dir;
+  return items.slice().sort(function(a,b){
+    var ad = a.type === 'DIRECTORY', bd = b.type === 'DIRECTORY';
+    if (ad && !bd) return -1;
+    if (!ad && bd) return 1;
+    var r = 0;
+    if (f === 'size') r = (a.size||0) - (b.size||0);
+    else if (f === 'date') r = fsMtimeNum(a.mtime) - fsMtimeNum(b.mtime);
+    else if (f === 'type') r = fsTypeExt(a.name).localeCompare(fsTypeExt(b.name));
+    else r = fsNameCmp(a.name, b.name);
+    if (r === 0 && f !== 'name') r = fsNameCmp(a.name, b.name);
+    return r * dir;
+  });
+}
+function fsSetSort(field){
+  if (['name','size','type','date'].indexOf(field) < 0) field = 'name';
+  _fsSort.field = field;
+  try { localStorage.setItem('fsSortField', field); } catch(e){}
+  fsSyncSortUI();
+  if (currentFsPath) fsNavigate(currentFsPath);
+}
+function fsToggleSortDir(){
+  _fsSort.dir = _fsSort.dir === 1 ? -1 : 1;
+  try { localStorage.setItem('fsSortDir', String(_fsSort.dir)); } catch(e){}
+  fsSyncSortUI();
+  if (currentFsPath) fsNavigate(currentFsPath);
+}
+function fsSyncSortUI(){
+  document.querySelectorAll('[id$="-fs-sortsel"]').forEach(function(s){ s.value = _fsSort.field; });
+  document.querySelectorAll('[id$="-fs-sortdir"] .fs-sortdir-arrow').forEach(function(a){ a.textContent = _fsSort.dir === 1 ? '↑' : '↓'; });
+}
+
 async function fsNavigate(path) {
   currentFsPath = path;
   fsRenderBreadcrumb(path);
+  fsSyncSortUI();
   // Mettre à jour l'onglet actif
   if (_fsActiveTab) {
     var _t = _fsTabs.find(function(t){ return t.id === _fsActiveTab; });
@@ -3989,11 +4044,7 @@ async function fsNavigate(path) {
     fsDeselect();
     el.innerHTML = '';
     el.className = 'fs-files fs-view-' + _fsView;
-    items.sort((a,b) => {
-      if (a.type === 'DIRECTORY' && b.type !== 'DIRECTORY') return -1;
-      if (a.type !== 'DIRECTORY' && b.type === 'DIRECTORY') return 1;
-      return (a.name||'').localeCompare(b.name||'');
-    });
+    items = fsSortItems(items);
     fsEl('fs-status').textContent = `${items.length} élément${items.length>1?'s':''}`;
     _fsEntries = [];
     items.forEach((item, _idx) => {
