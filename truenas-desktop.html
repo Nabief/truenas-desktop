@@ -481,7 +481,11 @@ try { document.documentElement.setAttribute('data-theme', localStorage.getItem('
   .fs-path {
     flex:1; background:rgba(255,255,255,0.05); border:1px solid var(--glass-border);
     border-radius:var(--radius-sm); padding:5px 10px; font-size:12px; color:var(--text-dim);
+    white-space:nowrap; overflow-x:auto; overflow-y:hidden; display:flex; align-items:center;
   }
+  .fs-crumb { cursor:pointer; color:var(--text-dim); font-size:12px; padding:1px 4px; border-radius:4px; white-space:nowrap; }
+  .fs-crumb:hover { color:var(--accent2); background:rgba(255,255,255,0.08); }
+  .fs-crumb-sep { color:var(--text-dim); font-size:11px; opacity:0.55; margin:0 1px; }
   .fs-btn {
     padding:5px 12px; border-radius:var(--radius-sm);
     background:rgba(0,120,212,0.2); border:1px solid rgba(0,120,212,0.3);
@@ -3544,6 +3548,7 @@ function buildFsWindowHtml(wid, top, left) {
           <button class="fstb-btn fstb-icon-only" onclick="setActiveFsWin('${wid}');fsSearch()" title="Rechercher dans ce dossier"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg></button>
           <button class="fstb-btn fstb-icon-only" onclick="setActiveFsWin('${wid}');fsGoUp()" title="Dossier parent"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/></svg></button>
           <button class="fstb-btn fstb-icon-only" onclick="setActiveFsWin('${wid}');fsRefresh()" title="Actualiser"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg></button>
+          <button class="fstb-btn fstb-icon-only" onclick="setActiveFsWin('${wid}');fsCopyPath()" title="Copier le chemin"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg></button>
         </div>
         <!-- Barre d'outils -->
         <div class="fs-toolbar">
@@ -3913,9 +3918,44 @@ function fsInitTabs() {
   if (typeof updateShareCount === 'function') updateShareCount();
 }
 
+function fsCrumbEsc(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+function fsRenderBreadcrumb(path){
+  var el = fsEl('fs-path');
+  if (!el) return;
+  var parts = String(path||'/').replace(/\/+$/,'').split('/').filter(Boolean);
+  var html = '<span class="fs-crumb" onclick="fsCrumbNav(this,\'/\')" title="Racine">/</span>';
+  var built = '';
+  parts.forEach(function(p){
+    built += '/' + p;
+    html += '<span class="fs-crumb-sep">›</span>'
+      + '<span class="fs-crumb" onclick="fsCrumbNav(this,\'' + built.replace(/\\/g,'\\\\').replace(/'/g,"\\'") + '\')" title="' + fsCrumbEsc(built) + '">' + fsCrumbEsc(p) + '</span>';
+  });
+  el.innerHTML = html;
+}
+function fsCrumbNav(elm, path){
+  try { var w = elm && elm.closest ? elm.closest('.window') : null; if (w && w.id) setActiveFsWin(w.id.replace(/^win-/,'')); } catch(_){}
+  fsNavigate(path);
+}
+function fsCopyPath(){
+  var p = currentFsPath || '/mnt';
+  try {
+    if (navigator.clipboard && navigator.clipboard.writeText) { navigator.clipboard.writeText(p); }
+    else { throw new Error('no clipboard'); }
+    toast('📋 Chemin copié : ' + p);
+  } catch(_){
+    try {
+      var ta = document.createElement('textarea');
+      ta.value = p; ta.style.position = 'fixed'; ta.style.opacity = '0';
+      document.body.appendChild(ta); ta.focus(); ta.select();
+      document.execCommand('copy'); document.body.removeChild(ta);
+      toast('📋 Chemin copié : ' + p);
+    } catch(e){ toast('Copie impossible'); }
+  }
+}
+
 async function fsNavigate(path) {
   currentFsPath = path;
-  fsEl('fs-path').textContent = path;
+  fsRenderBreadcrumb(path);
   // Mettre à jour l'onglet actif
   if (_fsActiveTab) {
     var _t = _fsTabs.find(function(t){ return t.id === _fsActiveTab; });
