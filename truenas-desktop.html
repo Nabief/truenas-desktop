@@ -7992,7 +7992,7 @@ async function loadAlertsWindow() {
   try {
     try { _tndUpdate = await fileops('GET', 'version'); } catch (e) {}
     var upCard = tndUpdateCardHtml();
-    const alerts = ensureArray(await socketCall('/alert/list'));
+    const alerts = ensureArray(await socketCall('/alert/list')).filter(function(a){ return !a.dismissed; });
     if (!alerts.length && !upCard) {
       el.innerHTML = '<div class="empty-state" style="height:200px;"><div class="es-icon">ok</div><span>Aucune alerte — Système opérationnel</span></div>';
       return;
