@@ -3205,6 +3205,24 @@ function initDesktop(sysInfo) {
   })();
   renderDesktopIcons();
   wsConnect();
+  tndOpenDeepLinkApp();
+}
+
+// Deep-link : ouvrir directement une app via l'URL (?app=<id> ou #<id>).
+// Utilisé notamment par l'extension de téléchargement (bouton « Ouvrir le gestionnaire » → ?app=downloads).
+function tndOpenDeepLinkApp() {
+  try {
+    var want = new URLSearchParams(location.search).get('app') || (location.hash || '').replace(/^#/, '');
+    if (!want) return;
+    want = decodeURIComponent(want).trim().toLowerCase();
+    setTimeout(function() {
+      try {
+        var app = (typeof ALL_APPS !== 'undefined' ? ALL_APPS : []).find(function(a){ return a.id === want; });
+        if (app && typeof app.action === 'function') app.action();
+        else openApp(want);
+      } catch (_) {}
+    }, 400);
+  } catch (_) {}
 }
 
 function updateUserUI() {
